@@ -1,0 +1,15 @@
+{
+  "name": "patric",
+  "version": "0.3.0",
+  "description": "Standalone coding assistant CLI inspired by Claude Code",
+  "type": "module",
+  "bin": {
+    "patric": "./bin/patric"
+  },
+  "scripts": {
+    "check": "bun run src/cli.ts --help >/dev/null && bun run src/cli.ts repo >/dev/null && bun --smol -e \"await import('/Users/nanshengtu/Desktop/patric/src/tui.ts')\" >/dev/null"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
