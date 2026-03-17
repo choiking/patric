@@ -1,4 +1,4 @@
-# patric
+# Patric
 
 `patric` is a standalone coding assistant CLI inspired by tools like Claude Code.
 
