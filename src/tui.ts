@@ -1,5 +1,6 @@
 import process from "node:process";
 import path from "node:path";
+import fs from "node:fs";
 import {
   clearStoredAuth,
   getEffectiveAuth,
@@ -869,6 +870,7 @@ export async function startTui(
   };
 
   const appendMessageToTranscript = (message: Message) => {
+    fs.appendFileSync("/tmp/patric-debug.log", message.role + "\n");
     if (mode !== "chat" || isInAltScreen) {
       return;
     }
@@ -878,7 +880,7 @@ export async function startTui(
     const columns = process.stdout.columns || 100;
     const width = Math.max(20, columns - 4);
     printTranscriptLines(formatMessageLines(message, width), {
-      leadingBlank: message.role === "user" && hasPrintedConversation,
+      leadingBlank: false,
       trailingBlank: message.role === "assistant"
     });
     if (message.role === "user") {
