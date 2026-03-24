@@ -606,6 +606,10 @@ export async function startTui(
   let transcriptEndsWithNewline = true;
   let introPrinted = false;
   let hasPrintedConversation = false;
+  let spinnerFrame = 0;
+  let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let abortController: AbortController | null = null;
 
   const draftConfig: PatricConfig = {
     ...config,
@@ -788,9 +792,45 @@ export async function startTui(
     return lines;
   };
 
+  const renderSpinnerPrompt = () => {
+    if (!isActive || mode !== "chat" || isInAltScreen) {
+      return;
+    }
+    clearPromptBlock();
+    const columns = process.stdout.columns || 100;
+    const width = Math.max(48, columns - 2);
+    const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
+    const left = `${theme.prompt(">")} ${theme.muted(`${frame} Thinking...`)}`;
+    const right = activeToolStatus ? theme.muted(activeToolStatus) : theme.muted("esc to stop");
+    const line = alignSides(truncateAnsi(left, Math.max(12, width - 18)), right, width);
+    process.stdout.write(line);
+    renderedPromptLines = 1;
+  };
+
+  const startSpinner = () => {
+    spinnerFrame = 0;
+    if (spinnerTimer) clearInterval(spinnerTimer);
+    spinnerTimer = setInterval(() => {
+      spinnerFrame = (spinnerFrame + 1) % spinnerFrames.length;
+      renderSpinnerPrompt();
+    }, 80);
+    renderSpinnerPrompt();
+  };
+
+  const stopSpinner = () => {
+    if (spinnerTimer) {
+      clearInterval(spinnerTimer);
+      spinnerTimer = null;
+    }
+    clearPromptBlock();
+  };
+
   const renderChatPrompt = () => {
-    if (!isActive || mode !== "chat" || isInAltScreen || isBusy) {
+    if (!isActive || mode !== "chat" || isInAltScreen) {
       clearPromptBlock();
+      return;
+    }
+    if (isBusy) {
       return;
     }
     clearPromptBlock();
@@ -1128,8 +1168,9 @@ export async function startTui(
   const renderInput = (): string[] => {
     const columns = process.stdout.columns || 100;
     const width = Math.max(48, columns - 2);
+    const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
     const prompt = isBusy
-      ? theme.muted("Waiting for response...")
+      ? theme.muted(`${frame} Thinking...`)
       : renderInputWithCursor(input, cursor, 'Try "what does this project do?"');
     const composer = [divider(width)];
     let rightStatus = "";
@@ -1503,7 +1544,9 @@ export async function startTui(
     if (command.startsWith("/patch ")) {
       isBusy = true;
       render();
+      startSpinner();
       const result = await generatePatch({ ...config, model: activeModel }, cwd, command.slice(7).trim(), true);
+      stopSpinner();
       isBusy = false;
       addMessage(result.ok ? "status" : "error", result.ok ? `Saved patch: ${result.patchPath}` : result.content);
       return;
@@ -1537,6 +1580,7 @@ export async function startTui(
     isBusy = true;
     addMessage("user", command);
     render();
+    startSpinner();
     let liveAssistantMessage: Message | null = null;
     let streamedAssistantOutput = false;
     const ensureAssistantMessage = () => {
@@ -1554,12 +1598,15 @@ export async function startTui(
         .join("\n\n");
     const runtimeConfig = getActiveChatConfig();
     llmMessages.push({ role: "user", content: command });
+    abortController = new AbortController();
     const result = await streamCompletion(runtimeConfig, llmMessages, (chunk) => {
+      if (!streamedAssistantOutput) stopSpinner();
       ensureAssistantMessage().content += chunk;
       writeTranscript(chunk);
       streamedAssistantOutput = true;
     }, (event: ToolEvent) => {
       if (event.type === "tool_start") {
+        stopSpinner();
         liveAssistantMessage = null;
         const summary = formatToolCallSummary(event.name, event.arguments);
         activeToolStatus = summary;
@@ -1571,7 +1618,9 @@ export async function startTui(
       } else if (event.type === "tool_round_complete") {
         activeToolStatus = "";
       }
-    });
+    }, abortController.signal);
+    abortController = null;
+    stopSpinner();
     isBusy = false;
     activeToolStatus = "";
     if (streamedAssistantOutput) {
@@ -1768,6 +1817,9 @@ export async function startTui(
       return;
     }
     if (isBusy) {
+      if (inputKey === "\u001b" && abortController) {
+        abortController.abort();
+      }
       return;
     }
     if (inputKey === "\u001b[A") {
@@ -1845,6 +1897,7 @@ export async function startTui(
       return;
     }
     isActive = false;
+    stopSpinner();
     process.stdin.off("data", onData);
     clearPromptBlock();
     if (process.stdin.isTTY) {

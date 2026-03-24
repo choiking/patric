@@ -604,7 +604,8 @@ async function streamOpenAIWithTools(
   config: PatricConfig,
   rawMessages: any[],
   tools: object[] | undefined,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ProviderResponse> {
   const provider = normalizeProvider(config);
   const isOllama = provider === "ollama";
@@ -630,7 +631,8 @@ async function streamOpenAIWithTools(
       isOllama || !auth
         ? { "content-type": "application/json" }
         : getOpenAICompatibleHeaders(auth),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -766,7 +768,8 @@ async function streamOpenAICodexWithTools(
   instructions: string,
   input: any[],
   tools: object[] | undefined,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ProviderResponse> {
   const auth = await getResolvedAuth(config);
   const model = resolveModel(config);
@@ -784,7 +787,8 @@ async function streamOpenAICodexWithTools(
   const response = await fetch(`${resolveBaseUrl(config)}/codex/responses`, {
     method: "POST",
     headers: getOpenAICodexHeaders(auth!),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -901,7 +905,8 @@ async function streamAnthropicWithTools(
   config: PatricConfig,
   rawMessages: any[],
   tools: object[] | undefined,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ProviderResponse> {
   const { system, messages: rest } = splitSystemMessage(rawMessages);
   const auth = await getResolvedAuth(config);
@@ -921,7 +926,8 @@ async function streamAnthropicWithTools(
   const response = await fetch(`${resolveBaseUrl(config)}/v1/messages`, {
     method: "POST",
     headers: getAnthropicHeaders(auth!),
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -1005,7 +1011,8 @@ async function streamGeminiWithTools(
   config: PatricConfig,
   rawMessages: any[],
   tools: object[] | undefined,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  signal?: AbortSignal
 ): Promise<ProviderResponse> {
   const { system, messages: rest } = splitSystemMessage(rawMessages);
   const auth = await getResolvedAuth(config);
@@ -1024,7 +1031,8 @@ async function streamGeminiWithTools(
     {
       method: "POST",
       headers: getGeminiHeaders(auth!),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     }
   );
 
@@ -1129,7 +1137,8 @@ async function streamWithToolLoop(
   config: PatricConfig,
   messages: ChatMessage[],
   onChunk?: (chunk: string) => void,
-  onToolEvent?: (event: ToolEvent) => void
+  onToolEvent?: (event: ToolEvent) => void,
+  signal?: AbortSignal
 ): Promise<CompletionResult> {
   const provider = normalizeProvider(config);
   const tools = getToolsForProvider(provider);
@@ -1157,15 +1166,16 @@ async function streamWithToolLoop(
   let fullContent = "";
   let usedTools = false;
 
+  try {
   for (let iteration = 0; iteration < MAX_TOOL_ROUNDS; iteration++) {
     let providerResponse: ProviderResponse;
 
     switch (provider) {
       case "anthropic":
-        providerResponse = await streamAnthropicWithTools(config, rawMessages, tools, onChunk);
+        providerResponse = await streamAnthropicWithTools(config, rawMessages, tools, onChunk, signal);
         break;
       case "gemini":
-        providerResponse = await streamGeminiWithTools(config, rawMessages, tools, onChunk);
+        providerResponse = await streamGeminiWithTools(config, rawMessages, tools, onChunk, signal);
         break;
       case "openai-codex":
         providerResponse = await streamOpenAICodexWithTools(
@@ -1173,14 +1183,15 @@ async function streamWithToolLoop(
           codexInstructions,
           rawMessages,
           tools,
-          onChunk
+          onChunk,
+          signal
         );
         break;
       case "ollama":
       case "openrouter":
       case "openai":
       default:
-        providerResponse = await streamOpenAIWithTools(config, rawMessages, tools, onChunk);
+        providerResponse = await streamOpenAIWithTools(config, rawMessages, tools, onChunk, signal);
         break;
     }
 
@@ -1263,6 +1274,12 @@ async function streamWithToolLoop(
     ok: false,
     content: `Reached maximum tool iterations (${MAX_TOOL_ROUNDS}) without a final answer.`
   };
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      return { ok: true, content: fullContent || "" };
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1300,14 +1317,15 @@ export async function streamCompletion(
   config: PatricConfig,
   messages: ChatMessage[],
   onChunk?: (chunk: string) => void,
-  onToolEvent?: (event: ToolEvent) => void
+  onToolEvent?: (event: ToolEvent) => void,
+  signal?: AbortSignal
 ): Promise<CompletionResult> {
   const configured = await ensureConfigured(config);
   if (!configured.ok) {
     return configured;
   }
 
-  return streamWithToolLoop(config, messages, onChunk, onToolEvent);
+  return streamWithToolLoop(config, messages, onChunk, onToolEvent, signal);
 }
 
 export async function testConnection(config: PatricConfig): Promise<CompletionResult> {
