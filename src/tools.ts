@@ -200,6 +200,19 @@ const TOOL_DEFINITIONS = [
       },
       required: []
     }
+  },
+  {
+    name: "open_file",
+    description:
+      "Open a file with the system default application (e.g. images in Preview, " +
+      "code in an editor, PDFs in a reader). Path is relative to the working directory.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        path: { type: "string", description: "File path (relative to working directory)" }
+      },
+      required: ["path"]
+    }
   }
 ];
 
@@ -289,6 +302,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         break;
       case "list_directory":
         content = executeListDirectory(call.arguments.path);
+        break;
+      case "open_file":
+        content = await executeOpenFile(call.arguments.path || "");
         break;
       default:
         content = `Unknown tool: ${call.name}`;
@@ -694,4 +710,39 @@ function executeListDirectory(dirPath?: string): string {
     });
 
   return formatted.length === 0 ? "(empty directory)" : formatted.join("\n");
+}
+
+async function executeOpenFile(filePath: string): Promise<string> {
+  if (!filePath) return "Error: path is required.";
+  const fullPath = safePath(filePath);
+  if (!fs.existsSync(fullPath)) return `Error: file not found: ${filePath}`;
+
+  const platform = process.platform;
+  const command =
+    platform === "darwin"
+      ? { cmd: "open", args: [fullPath] }
+      : platform === "win32"
+        ? { cmd: "cmd", args: ["/c", "start", "", fullPath] }
+        : { cmd: "xdg-open", args: [fullPath] };
+
+  return new Promise<string>((resolve) => {
+    const child = spawn(command.cmd, command.args, {
+      stdio: "ignore",
+      detached: platform !== "win32"
+    });
+    let settled = false;
+    child.once("error", (err) => {
+      if (!settled) {
+        settled = true;
+        resolve(`Error: failed to open ${filePath}: ${err.message}`);
+      }
+    });
+    child.once("spawn", () => {
+      if (!settled) {
+        settled = true;
+        if (platform !== "win32") child.unref();
+        resolve(`Opened ${filePath} with the default application.`);
+      }
+    });
+  });
 }
