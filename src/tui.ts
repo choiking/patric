@@ -312,42 +312,6 @@ function formatToolCallSummary(name: string, args?: Record<string, any>): string
   return name;
 }
 
-function renderWelcomeField(label: string, value: string, width: number): string {
-  return alignSides(theme.key(label), theme.system(truncatePlain(value, Math.max(12, width - 14))), width);
-}
-
-function renderWelcomePanel(
-  width: number,
-  details: { cwd: string; provider: string; model: string; authStatus: string }
-): string[] {
-  const panelWidth = Math.min(76, Math.max(50, width - 8));
-  const inner = Math.max(1, panelWidth - 4);
-  const lines = [
-    theme.accentStrong("✻ Welcome to Patric"),
-    theme.muted("Start with a task, a code question, or a shell problem."),
-    "",
-    divider(inner, "Session"),
-    "",
-    renderWelcomeField("cwd", details.cwd, inner),
-    renderWelcomeField("provider", details.provider, inner),
-    renderWelcomeField("model", details.model, inner),
-    renderWelcomeField("status", details.authStatus, inner),
-    "",
-    divider(inner, "Recent"),
-    "",
-    theme.muted("No recent conversations in this directory."),
-    "",
-    divider(inner, "Try asking"),
-    "",
-    theme.system("what does this project do?"),
-    theme.system("where is the main entry point?"),
-    theme.system("review the recent changes"),
-    "",
-    `${theme.muted("Use")} ${theme.key("/help")} ${theme.muted("for commands or")} ${theme.key("/settings")} ${theme.muted("to configure.")}`
-  ];
-  return panel(lines, panelWidth);
-}
-
 function wrapText(text: string, width: number): string[] {
   const lines: string[] = [];
   for (const rawLine of text.split("\n")) {
@@ -528,10 +492,6 @@ function renderMarkdown(text: string, width: number): string[] {
   }
 
   return out;
-}
-
-function enterAltScreen(): void {
-  process.stdout.write("\x1b[?1049h\x1b[3J\x1b[H\x1b[2J");
 }
 
 function leaveAltScreen(): void {
