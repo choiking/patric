@@ -605,6 +605,9 @@ export async function startTui(
   let cursor = 0;
   let scrollOffset = 0;
   let slashIndex = 0;
+  const promptHistory: string[] = [];
+  let historyIndex = -1;
+  let savedInput = "";
   let settingsIndex = 0;
   let pickerIndex = 0;
   let editingField: "apiKey" | "baseUrl" | "customModel" | null = null;
@@ -1358,6 +1361,8 @@ export async function startTui(
     input = "";
     cursor = 0;
     slashIndex = 0;
+    historyIndex = -1;
+    savedInput = "";
   };
 
   const persistDraftSettings = (status: string) => {
@@ -1839,12 +1844,30 @@ export async function startTui(
     if (inputKey === "\u001b[A") {
       if (suggestions.length > 0) {
         slashIndex = (slashIndex - 1 + suggestions.length) % suggestions.length;
+      } else if (promptHistory.length > 0) {
+        if (historyIndex === -1) {
+          savedInput = input;
+          historyIndex = promptHistory.length - 1;
+        } else if (historyIndex > 0) {
+          historyIndex--;
+        }
+        input = promptHistory[historyIndex];
+        cursor = input.length;
       }
       return;
     }
     if (inputKey === "\u001b[B") {
       if (suggestions.length > 0) {
         slashIndex = (slashIndex + 1) % suggestions.length;
+      } else if (historyIndex !== -1) {
+        historyIndex++;
+        if (historyIndex >= promptHistory.length) {
+          input = savedInput;
+          historyIndex = -1;
+        } else {
+          input = promptHistory[historyIndex];
+        }
+        cursor = input.length;
       }
       return;
     }
@@ -1876,6 +1899,9 @@ export async function startTui(
         }
       }
       const command = input;
+      if (command.trim()) {
+        promptHistory.push(command);
+      }
       resetInput();
       await runCommand(command);
       return;
