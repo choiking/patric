@@ -19,6 +19,7 @@ import {
   saveConfig
 } from "./config";
 import { loginWithOpenAIOAuth, openBrowser } from "./oauth";
+import { closeBrowser } from "./browser";
 import { applyPatch, generatePatch } from "./patch";
 import {
   getContextPercentage,
@@ -309,6 +310,19 @@ function formatToolCallSummary(name: string, args?: Record<string, any>): string
   if (name === "list_directory") {
     const p = typeof args?.path === "string" ? args.path : ".";
     return `list_directory ${truncatePlain(p, 50)}`;
+  }
+  if (name === "browser") {
+    const action = typeof args?.action === "string" ? args.action : "";
+    if (action === "navigate") {
+      const url = typeof args?.url === "string" ? args.url : "";
+      return url ? `browser navigate ${truncatePlain(url, 44)}` : "browser navigate";
+    }
+    if (action === "click") return `browser click [${args?.ref ?? "?"}]`;
+    if (action === "type") {
+      const t = typeof args?.text === "string" ? args.text : "";
+      return `browser type [${args?.ref ?? "?"}] "${truncatePlain(t, 30)}"`;
+    }
+    return action ? `browser ${action}` : "browser";
   }
   return name;
 }
@@ -1898,6 +1912,7 @@ export async function startTui(
     }
     isActive = false;
     stopSpinner();
+    closeBrowser().catch(() => {});
     process.stdin.off("data", onData);
     clearPromptBlock();
     if (process.stdin.isTTY) {

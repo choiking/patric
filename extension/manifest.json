@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Patric Browser Relay",
+  "version": "1.0.0",
+  "description": "Bridges Patric AI assistant to your running Chrome browser via CDP relay.",
+  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

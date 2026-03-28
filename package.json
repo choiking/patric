@@ -9,6 +9,9 @@
   "scripts": {
     "check": "bun run src/cli.ts --help >/dev/null && bun run src/cli.ts repo >/dev/null && bun --smol -e \"await import('/Users/nanshengtu/Desktop/patric/src/tui.ts')\" >/dev/null"
   },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  },
   "engines": {
     "node": ">=20"
   }

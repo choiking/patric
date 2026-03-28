@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { executeBrowserAction } from "./browser";
 
 // ---------------------------------------------------------------------------
 // Safety utilities
@@ -213,6 +214,44 @@ const TOOL_DEFINITIONS = [
       },
       required: ["path"]
     }
+  },
+  {
+    name: "browser",
+    description:
+      "Control a browser to navigate web pages, interact with elements, and extract content. " +
+      "Workflow: (1) 'navigate' to a URL, (2) 'snapshot' to see the page's interactive elements as numbered refs, " +
+      "(3) use 'click', 'type', 'select' with ref numbers to interact. " +
+      "Actions: navigate, snapshot, screenshot, click, type, select, check, uncheck, " +
+      "evaluate, wait, text, tab_list, tab_new, tab_switch, tab_close, download, back, forward, reload, close.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          description:
+            "The browser action to perform. One of: " +
+            "navigate (go to URL), snapshot (get page structure with numbered refs), " +
+            "screenshot (capture page image), click (click element by ref), " +
+            "type (type text into element by ref), select (select option by ref), " +
+            "check (check checkbox by ref), uncheck (uncheck checkbox by ref), " +
+            "evaluate (run JavaScript), wait (wait for selector/text/time), " +
+            "text (get page text content), " +
+            "tab_list (list open tabs), tab_new (open new tab), " +
+            "tab_switch (switch to tab by index), tab_close (close current tab), " +
+            "download (download a file from URL), " +
+            "back (go back), forward (go forward), reload (reload page), " +
+            "close (close the browser)"
+        },
+        url: { type: "string", description: "URL for 'navigate', 'tab_new', or 'download' actions" },
+        ref: { type: "number", description: "Element reference number from a snapshot (for click, type, select, check, uncheck)" },
+        text: { type: "string", description: "Text to type (for 'type' action), option value (for 'select'), or text to wait for (for 'wait')" },
+        expression: { type: "string", description: "JavaScript expression (for 'evaluate' action)" },
+        selector: { type: "string", description: "CSS selector (for 'wait' action)" },
+        timeout: { type: "number", description: "Timeout in milliseconds (for 'wait' action, default 10000)" },
+        tab_index: { type: "number", description: "Tab index for 'tab_switch' (0-based)" }
+      },
+      required: ["action"]
+    }
   }
 ];
 
@@ -305,6 +344,9 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         break;
       case "open_file":
         content = await executeOpenFile(call.arguments.path || "");
+        break;
+      case "browser":
+        content = await executeBrowserAction(call.arguments);
         break;
       default:
         content = `Unknown tool: ${call.name}`;
