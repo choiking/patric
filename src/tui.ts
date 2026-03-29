@@ -32,6 +32,14 @@ import {
 } from "./provider";
 import { collectContext, getRepoInfo } from "./repo";
 import { execCommand, listDir, readFileSafe, writeFileSafe } from "./utils";
+import chalk from "chalk";
+import { Marked } from "marked";
+import { markedTerminal } from "marked-terminal";
+
+// marked-terminal uses chalk which auto-detects color level at import time.
+// In the TUI's alternate screen buffer, chalk may detect level 0 (no color).
+// Force truecolor support since we only render in TTY mode.
+chalk.level = 3;
 
 type Role = "system" | "user" | "assistant" | "status" | "error" | "tool";
 
@@ -385,129 +393,27 @@ function normalizeNewlines(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Lightweight markdown → ANSI rendering
+// Markdown → ANSI rendering (using marked-terminal)
 // ---------------------------------------------------------------------------
 
-function renderMarkdownInline(line: string): string {
-  // Inline code: `code`
-  line = line.replace(/`([^`]+)`/g, (_, code) => style(code, 38, 5, 223));
-  // Bold + italic: ***text*** or ___text___
-  line = line.replace(/\*{3}(.+?)\*{3}/g, (_, t) => style(t, 1, 3));
-  line = line.replace(/_{3}(.+?)_{3}/g, (_, t) => style(t, 1, 3));
-  // Bold: **text** or __text__
-  line = line.replace(/\*{2}(.+?)\*{2}/g, (_, t) => style(t, 1));
-  line = line.replace(/_{2}(.+?)_{2}/g, (_, t) => style(t, 1));
-  // Italic: *text* or _text_  (avoid matching mid-word underscores)
-  line = line.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, (_, t) => style(t, 3));
-  line = line.replace(/(?<!\w)_(.+?)_(?!\w)/g, (_, t) => style(t, 3));
-  // Strikethrough: ~~text~~
-  line = line.replace(/~~(.+?)~~/g, (_, t) => style(t, 9));
-  // Links: [text](url) → text (url dimmed)
-  line = line.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) =>
-    `${style(text, 4, 38, 5, 75)} ${style(url, 2, 38, 5, 244)}`
-  );
-  return line;
-}
-
 function renderMarkdown(text: string, width: number): string[] {
-  const raw = text.split("\n");
-  const out: string[] = [];
-  let inCodeBlock = false;
-  let codeLang = "";
-
-  for (let i = 0; i < raw.length; i++) {
-    const line = raw[i];
-
-    // Fenced code blocks: ```lang
-    if (line.trimStart().startsWith("```")) {
-      if (!inCodeBlock) {
-        inCodeBlock = true;
-        codeLang = line.trimStart().slice(3).trim();
-        const label = codeLang ? ` ${codeLang} ` : "";
-        out.push(style(`${"─".repeat(Math.min(3, width))}${label}${"─".repeat(Math.max(0, Math.min(40, width - 3 - label.length)))}`, 38, 5, 238));
-      } else {
-        inCodeBlock = false;
-        codeLang = "";
-        out.push(style("─".repeat(Math.min(44, width)), 38, 5, 238));
-      }
-      continue;
+  const m = new Marked();
+  const ext = markedTerminal({ width, reflowText: true, showSectionPrefix: false });
+  // Fix marked-terminal bug: text renderer doesn't recurse into inline tokens
+  const origText = ext.renderer.text;
+  ext.renderer.text = function (token: any) {
+    if (typeof token === "object" && token.tokens) {
+      return this.parser.parseInline(token.tokens);
     }
-
-    if (inCodeBlock) {
-      // Code content: dim yellow-ish on a subtle background
-      const wrapped = wrapText(line, Math.max(10, width - 2));
-      for (const w of wrapped) {
-        out.push(`  ${style(w, 38, 5, 223)}`);
-      }
-      continue;
-    }
-
-    // Headers: # ## ### etc.
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)/);
-    if (headerMatch) {
-      const content = renderMarkdownInline(headerMatch[2]);
-      out.push(bold(content));
-      continue;
-    }
-
-    // Horizontal rules: --- or *** or ___
-    if (/^(\s*[-*_]){3,}\s*$/.test(line)) {
-      out.push(style("─".repeat(Math.min(44, width)), 38, 5, 238));
-      continue;
-    }
-
-    // Blockquote: > text
-    const bqMatch = line.match(/^>\s?(.*)/);
-    if (bqMatch) {
-      const wrapped = wrapText(renderMarkdownInline(bqMatch[1]), Math.max(10, width - 4));
-      for (const w of wrapped) {
-        out.push(`${style("│", 38, 5, 238)} ${style(w, 3, 38, 5, 244)}`);
-      }
-      continue;
-    }
-
-    // Unordered list: - item or * item
-    const ulMatch = line.match(/^(\s*)[*\-+]\s+(.*)/);
-    if (ulMatch) {
-      const indent = ulMatch[1];
-      const content = renderMarkdownInline(ulMatch[2]);
-      const wrapped = wrapText(content, Math.max(10, width - indent.length - 4));
-      out.push(`${indent}  ${style("•", 38, 5, 244)} ${wrapped[0] || ""}`);
-      for (let j = 1; j < wrapped.length; j++) {
-        out.push(`${indent}    ${wrapped[j]}`);
-      }
-      continue;
-    }
-
-    // Ordered list: 1. item
-    const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)/);
-    if (olMatch) {
-      const indent = olMatch[1];
-      const num = olMatch[2];
-      const content = renderMarkdownInline(olMatch[3]);
-      const prefix = `${indent}${style(`${num}.`, 38, 5, 244)} `;
-      const wrapped = wrapText(content, Math.max(10, width - indent.length - num.length - 3));
-      out.push(`${prefix}${wrapped[0] || ""}`);
-      for (let j = 1; j < wrapped.length; j++) {
-        out.push(`${indent}${" ".repeat(num.length + 2)}${wrapped[j]}`);
-      }
-      continue;
-    }
-
-    // Empty line
-    if (!line.trim()) {
-      out.push("");
-      continue;
-    }
-
-    // Regular paragraph text
-    const wrapped = wrapText(renderMarkdownInline(line), Math.max(10, width));
-    for (const w of wrapped) {
-      out.push(w);
-    }
+    return origText.call(this, token);
+  };
+  m.use(ext);
+  const raw = m.parse(text, { async: false }) as string;
+  const lines = raw.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
   }
-
-  return out;
+  return lines;
 }
 
 function leaveAltScreen(): void {
@@ -1622,7 +1528,7 @@ export async function startTui(
     const result = await streamCompletion(runtimeConfig, llmMessages, (chunk) => {
       if (!streamedAssistantOutput) stopSpinner();
       ensureAssistantMessage().content += chunk;
-      writeTranscript(chunk);
+      redrawChatScreen();
       streamedAssistantOutput = true;
     }, (event: ToolEvent) => {
       if (event.type === "tool_start") {
@@ -1644,10 +1550,7 @@ export async function startTui(
     isBusy = false;
     activeToolStatus = "";
     if (streamedAssistantOutput) {
-      if (!transcriptEndsWithNewline) {
-        writeTranscript("\n");
-      }
-      writeTranscript("\n");
+      redrawChatScreen();
     }
     if (!result.ok) {
       if (!liveAssistantMessage) {
