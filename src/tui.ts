@@ -10,6 +10,7 @@ import {
   setStoredOAuthAuth
 } from "./auth";
 import type { PatricConfig } from "./config";
+import { appendHistory, loadHistory } from "./history";
 import {
   formatConfigSummary,
   getDefaultBaseUrl,
@@ -605,7 +606,7 @@ export async function startTui(
   let cursor = 0;
   let scrollOffset = 0;
   let slashIndex = 0;
-  const promptHistory: string[] = [];
+  const promptHistory: string[] = loadHistory();
   let historyIndex = -1;
   let savedInput = "";
   let settingsIndex = 0;
@@ -1901,6 +1902,7 @@ export async function startTui(
       const command = input;
       if (command.trim()) {
         promptHistory.push(command);
+        appendHistory(command);
       }
       resetInput();
       await runCommand(command);
