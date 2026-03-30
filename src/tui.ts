@@ -2,6 +2,14 @@ import process from "node:process";
 import path from "node:path";
 import fs from "node:fs";
 import {
+  buildAgentSystemPrompt,
+  buildAgentTaskPrompt,
+  formatAgentList,
+  getEffectiveAgentToolNames,
+  loadAgentRegistry,
+  resolveAgentModel
+} from "./agents";
+import {
   clearStoredAuth,
   getEffectiveAuth,
   getEffectiveAuthStatus,
@@ -31,6 +39,7 @@ import {
   type ToolEvent
 } from "./provider";
 import { collectContext, getRepoInfo } from "./repo";
+import { AGENT_TOOL_NAMES, getAllToolNames } from "./tools";
 import { execCommand, listDir, readFileSafe, writeFileSafe } from "./utils";
 import chalk from "chalk";
 import { Marked } from "marked";
@@ -50,6 +59,7 @@ interface Message {
   content: string;
   state?: "running" | "done" | "error";
   detail?: string;
+  key?: string;
 }
 
 interface SlashCommand {
@@ -67,6 +77,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/exec", description: "Run shell command" },
   { name: "/repo", description: "Show repository status" },
   { name: "/context", description: "Print repository context" },
+  { name: "/agents", description: "List saved sub-agents" },
+  { name: "/agent", description: "Run a saved sub-agent" },
   { name: "/patch", description: "Generate a patch file" },
   { name: "/apply", description: "Apply a patch file" },
   { name: "/settings", description: "Open settings" },
@@ -333,6 +345,21 @@ function formatToolCallSummary(name: string, args?: Record<string, any>): string
     }
     return action ? `browser ${action}` : "browser";
   }
+  if (name === "spawn_agent") {
+    const agentName = typeof args?.name === "string" ? args.name : "?";
+    return `spawn_agent ${truncatePlain(agentName, 24)}`;
+  }
+  if (name === "wait_agent") {
+    const agentId = typeof args?.agent_id === "string" ? args.agent_id : "?";
+    return `wait_agent ${truncatePlain(agentId, 24)}`;
+  }
+  if (name === "cancel_agent") {
+    const agentId = typeof args?.agent_id === "string" ? args.agent_id : "?";
+    return `cancel_agent ${truncatePlain(agentId, 24)}`;
+  }
+  if (name === "list_agents") {
+    return "list_agents";
+  }
   return name;
 }
 
@@ -535,6 +562,17 @@ export async function startTui(
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let abortController: AbortController | null = null;
 
+  // Agent run tracking for tree display
+  interface AgentRunInfo {
+    id: string;
+    name: string;
+    task: string;
+    state: "queued" | "running" | "done" | "error" | "cancelled";
+    toolUses: number;
+    lastTool: string;
+  }
+  const agentRuns = new Map<string, AgentRunInfo>();
+
   const draftConfig: PatricConfig = {
     ...config,
     recentModels: { ...config.recentModels }
@@ -566,12 +604,18 @@ export async function startTui(
     appendMessageToTranscript(message);
   };
 
-  const addToolMessage = (content: string, state: "running" | "done" | "error", detail = "") => {
+  const addToolMessage = (
+    content: string,
+    state: "running" | "done" | "error",
+    detail = "",
+    key?: string
+  ) => {
     const message = {
       role: "tool" as const,
       content: normalizeNewlines(content),
       state,
-      detail: normalizeNewlines(detail)
+      detail: normalizeNewlines(detail),
+      key
     };
     messages.push(message);
     appendMessageToTranscript(message);
@@ -589,8 +633,133 @@ export async function startTui(
     }
   };
 
+  const upsertToolMessage = (
+    key: string,
+    content: string,
+    state: "running" | "done" | "error",
+    detail = ""
+  ) => {
+    const normalizedContent = normalizeNewlines(content);
+    const normalizedDetail = normalizeNewlines(detail);
+    const existing = messages.find((message) => message.role === "tool" && message.key === key);
+    if (existing) {
+      existing.content = normalizedContent;
+      existing.state = state;
+      existing.detail = normalizedDetail;
+      appendMessageToTranscript(existing);
+      return;
+    }
+    addToolMessage(normalizedContent, state, normalizedDetail, key);
+  };
+
   const setStatus = (text: string) => {
     overlayStatus = text;
+  };
+
+  const renderAgentGroupMessage = () => {
+    if (agentRuns.size === 0) {
+      return;
+    }
+    const runs = [...agentRuns.values()];
+    const running = runs.filter((r) => r.state === "queued" || r.state === "running");
+    const done = runs.filter((r) => r.state === "done");
+    const failed = runs.filter((r) => r.state === "error" || r.state === "cancelled");
+    const allFinished = running.length === 0;
+
+    // Build header
+    let header: string;
+    if (allFinished) {
+      const names = runs.map((r) => capitalize(r.name)).join(", ");
+      header = `Ran ${runs.length} agent${runs.length > 1 ? "s" : ""}: ${names}`;
+    } else {
+      const agentNames = new Map<string, number>();
+      for (const r of running) {
+        agentNames.set(r.name, (agentNames.get(r.name) || 0) + 1);
+      }
+      const parts: string[] = [];
+      for (const [name, count] of agentNames) {
+        parts.push(`${count} ${capitalize(name)} agent${count > 1 ? "s" : ""}`);
+      }
+      header = `Running ${parts.join(", ")}…`;
+    }
+
+    // Build tree lines
+    const lines: string[] = [header];
+    for (let i = 0; i < runs.length; i++) {
+      const run = runs[i];
+      const isLast = i === runs.length - 1;
+      const prefix = isLast ? "└─" : "├─";
+      const childPrefix = isLast ? "   " : "│  ";
+      const toolInfo = run.toolUses > 0 ? ` · ${run.toolUses} tool use${run.toolUses > 1 ? "s" : ""}` : "";
+      const taskLabel = truncatePlain(run.task, 60);
+      lines.push(`${prefix} ${capitalize(run.name)}: ${taskLabel}${toolInfo}`);
+      if (run.lastTool && (run.state === "running" || run.state === "queued")) {
+        lines.push(`${childPrefix}⎿  ${run.lastTool}`);
+      }
+    }
+
+    const content = lines.join("\n");
+    const state = allFinished
+      ? (failed.length > 0 ? "error" : "done")
+      : "running";
+    upsertToolMessage("agent-group", content, state as "running" | "done" | "error");
+  };
+
+  function capitalize(s: string): string {
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  const handleToolEvent = (event: ToolEvent) => {
+    if (event.type === "tool_start") {
+      stopSpinner();
+      const summary = formatToolCallSummary(event.name, event.arguments);
+      activeToolStatus = summary;
+      addToolMessage(summary, "running");
+      return;
+    }
+    if (event.type === "tool_end") {
+      const failed = Boolean(event.result && event.result.startsWith("Tool error:"));
+      updateLastToolMessage(failed ? "error" : "done", failed ? event.result || "" : "");
+      activeToolStatus = "";
+      return;
+    }
+    if (event.type === "tool_round_complete") {
+      activeToolStatus = "";
+      return;
+    }
+    if (event.type === "agent_status") {
+      const agentId = event.agentId || event.agentName || "agent";
+      const agentName = event.agentName || "agent";
+      const existing = agentRuns.get(agentId);
+      if (existing) {
+        existing.state = event.agentState || "running";
+      } else {
+        agentRuns.set(agentId, {
+          id: agentId,
+          name: agentName,
+          task: event.detail || "",
+          state: event.agentState || "queued",
+          toolUses: 0,
+          lastTool: "",
+        });
+      }
+      renderAgentGroupMessage();
+      return;
+    }
+    if (event.type === "agent_tool_start") {
+      const agentId = event.agentId || "";
+      const run = agentRuns.get(agentId);
+      if (run) {
+        run.toolUses += 1;
+        run.lastTool = formatToolCallSummary(event.name, event.arguments);
+        renderAgentGroupMessage();
+      }
+      return;
+    }
+    if (event.type === "agent_tool_end") {
+      renderAgentGroupMessage();
+      return;
+    }
   };
 
   const syncDraftConfig = () => {
@@ -805,6 +974,18 @@ export async function startTui(
     if (message.role === "assistant") {
       return renderMarkdown(message.content, Math.max(10, width));
     }
+    if (message.role === "tool" && message.key === "agent-group") {
+      const contentLines = message.content.split("\n");
+      const color = message.state === "running" ? theme.muted
+        : message.state === "error" ? theme.error
+        : theme.system;
+      const icon = message.state === "running" ? theme.muted("⏺")
+        : message.state === "error" ? theme.error("⏺")
+        : theme.success("⏺");
+      return contentLines.map((line, li) =>
+        li === 0 ? `${icon} ${color(line)}` : `  ${color(line)}`
+      );
+    }
     if (message.role === "tool") {
       const icon = message.state === "running"
         ? theme.muted("⏺")
@@ -816,12 +997,7 @@ export async function startTui(
         : message.state === "running"
           ? theme.muted
           : theme.system;
-      const statusLabel = message.state === "running"
-        ? message.content
-        : message.state === "error"
-          ? `${message.content} failed`
-          : `${message.content} complete`;
-      const lines = wrapText(statusLabel, Math.max(10, width - 3))
+      const lines = wrapText(message.content, Math.max(10, width - 3))
         .map((line) => `${icon} ${body(line)}`);
       if (message.detail && message.state === "error") {
         lines.push(...wrapText(message.detail, Math.max(10, width - 5)).map((line) => `  ${theme.error(line)}`));
@@ -1033,6 +1209,21 @@ export async function startTui(
           out.push(line);
         }
         out.push("");
+      } else if (message.role === "tool" && message.key === "agent-group") {
+        const lines = message.content.split("\n");
+        const color = message.state === "running" ? theme.muted
+          : message.state === "error" ? theme.error
+          : theme.system;
+        const icon = message.state === "running" ? theme.muted("⏺")
+          : message.state === "error" ? theme.error("⏺")
+          : theme.success("⏺");
+        for (let li = 0; li < lines.length; li++) {
+          if (li === 0) {
+            out.push(`${icon} ${color(lines[li])}`);
+          } else {
+            out.push(`  ${color(lines[li])}`);
+          }
+        }
       } else if (message.role === "tool") {
         const icon = message.state === "running"
           ? theme.muted("⏺")
@@ -1044,12 +1235,7 @@ export async function startTui(
           : message.state === "running"
             ? theme.muted
             : theme.system;
-        const statusLabel = message.state === "running"
-          ? message.content
-          : message.state === "error"
-            ? `${message.content} failed`
-            : `${message.content} complete`;
-        for (const line of wrapText(statusLabel, Math.max(10, width - 3))) {
+        for (const line of wrapText(message.content, Math.max(10, width - 3))) {
           out.push(`${icon} ${body(line)}`);
         }
         if (message.detail && message.state === "error") {
@@ -1393,6 +1579,100 @@ export async function startTui(
     return false;
   };
 
+  const runSavedAgent = async (name: string, task: string) => {
+    const registry = loadAgentRegistry(cwd);
+    const spec = registry.byName.get(name.trim().toLowerCase());
+    if (!spec) {
+      addMessage("error", `Unknown agent: ${name}`);
+      return;
+    }
+
+    const allowedToolNames = getEffectiveAgentToolNames(
+      spec,
+      getAllToolNames().filter((toolName) => !AGENT_TOOL_NAMES.includes(toolName as any))
+    );
+    const runtimeConfig: PatricConfig = {
+      ...getActiveChatConfig(),
+      model: resolveAgentModel(getActiveChatConfig(), spec)
+    };
+
+    isBusy = true;
+    addMessage("status", `Running agent ${spec.name}`);
+    render();
+    startSpinner();
+
+    let liveAssistantMessage: Message | null = null;
+    let streamedAssistantOutput = false;
+    const ensureAssistantMessage = () => {
+      if (!liveAssistantMessage) {
+        liveAssistantMessage = { role: "assistant", content: "" };
+        messages.push(liveAssistantMessage);
+      }
+      return liveAssistantMessage;
+    };
+
+    abortController = new AbortController();
+    const result = await streamCompletion(
+      runtimeConfig,
+      [
+        { role: "system", content: buildAgentSystemPrompt(runtimeConfig.systemPrompt, spec) },
+        { role: "user", content: buildAgentTaskPrompt(task) }
+      ],
+      (chunk) => {
+        if (!streamedAssistantOutput) {
+          stopSpinner();
+        }
+        ensureAssistantMessage().content += chunk;
+        writeTranscript(chunk);
+        streamedAssistantOutput = true;
+      },
+      (event) => {
+        if (event.type === "tool_start") {
+          liveAssistantMessage = null;
+        }
+        handleToolEvent(event);
+      },
+      abortController.signal,
+      {
+        allowedToolNames,
+        agentRegistry: registry,
+        agent: { kind: "sub-agent", name: spec.name }
+      }
+    );
+    abortController = null;
+    stopSpinner();
+    isBusy = false;
+    activeToolStatus = "";
+
+    if (streamedAssistantOutput) {
+      if (!transcriptEndsWithNewline) {
+        writeTranscript("\n");
+      }
+      writeTranscript("\n");
+    }
+
+    if (!result.ok) {
+      if (!liveAssistantMessage) {
+        liveAssistantMessage = { role: "error", content: result.content };
+        messages.push(liveAssistantMessage);
+        appendMessageToTranscript(liveAssistantMessage);
+      } else {
+        liveAssistantMessage.role = "error";
+        liveAssistantMessage.content = result.content;
+        if (!streamedAssistantOutput) {
+          appendMessageToTranscript(liveAssistantMessage);
+        }
+      }
+      return;
+    }
+
+    if (!liveAssistantMessage && result.content) {
+      liveAssistantMessage = { role: "assistant", content: result.content };
+      messages.push(liveAssistantMessage);
+      appendMessageToTranscript(liveAssistantMessage);
+    }
+  };
+
   const runCommand = async (raw: string) => {
     const command = raw.trim();
     if (!command) {
@@ -1404,7 +1684,7 @@ export async function startTui(
         "status",
         [
           "Patric commands",
-          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /patch, /apply, /settings, /model, /exit"
+          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /agents, /agent run <name> <prompt>, /patch, /apply, /settings, /model, /exit"
         ].join("\n")
       );
       return;
@@ -1467,6 +1747,26 @@ export async function startTui(
       addMessage("status", collectContext(cwd, targets));
       return;
     }
+    if (command === "/agents") {
+      addMessage("status", formatAgentList(loadAgentRegistry(cwd)));
+      return;
+    }
+    if (command.startsWith("/agent run ")) {
+      const rest = command.slice(11).trim();
+      const firstSpace = rest.indexOf(" ");
+      if (firstSpace === -1) {
+        addMessage("error", "Usage: /agent run <name> <prompt>");
+        return;
+      }
+      const name = rest.slice(0, firstSpace).trim();
+      const task = rest.slice(firstSpace + 1).trim();
+      if (!name || !task) {
+        addMessage("error", "Usage: /agent run <name> <prompt>");
+        return;
+      }
+      await runSavedAgent(name, task);
+      return;
+    }
     if (command.startsWith("/patch ")) {
       isBusy = true;
       render();
@@ -1503,6 +1803,7 @@ export async function startTui(
     }
 
     const turnStartIndex = messages.length;
+    agentRuns.clear();
     isBusy = true;
     addMessage("user", command);
     render();
@@ -1530,20 +1831,11 @@ export async function startTui(
       ensureAssistantMessage().content += chunk;
       redrawChatScreen();
       streamedAssistantOutput = true;
-    }, (event: ToolEvent) => {
+    }, (event) => {
       if (event.type === "tool_start") {
-        stopSpinner();
         liveAssistantMessage = null;
-        const summary = formatToolCallSummary(event.name, event.arguments);
-        activeToolStatus = summary;
-        addToolMessage(summary, "running");
-      } else if (event.type === "tool_end") {
-        const failed = Boolean(event.result && event.result.startsWith("Tool error:"));
-        updateLastToolMessage(failed ? "error" : "done", failed ? event.result || "" : "");
-        activeToolStatus = "";
-      } else if (event.type === "tool_round_complete") {
-        activeToolStatus = "";
       }
+      handleToolEvent(event);
     }, abortController.signal);
     abortController = null;
     stopSpinner();

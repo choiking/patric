@@ -8,7 +8,20 @@ import {
 import { getEffectiveAuth, setStoredOAuthAuth, type OAuthAuth, type ProviderAuth } from "./auth";
 import { extractOpenAIAccountId, refreshGoogleOAuth, refreshOpenAIOAuth } from "./oauth";
 import {
+  buildAgentSystemPrompt,
+  buildAgentTaskPrompt,
+  createAgentManager,
+  formatAgentPromptSummary,
+  getEffectiveAgentToolNames,
+  loadAgentRegistry,
+  resolveAgentModel,
+  type AgentManager,
+  type AgentRegistry
+} from "./agents";
+import {
+  AGENT_TOOL_NAMES,
   executeTool,
+  getAllToolNames,
   getToolsForProvider,
   MAX_TOOL_ROUNDS,
   type ToolCall,
@@ -26,6 +39,16 @@ export interface CompletionResult {
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+export interface RuntimeContext {
+  allowedToolNames?: string[];
+  agentManager?: AgentManager;
+  agentRegistry?: AgentRegistry;
+  agent?: {
+    kind: "top-level" | "sub-agent";
+    name?: string;
+  };
 }
 
 type ProviderName = "openai" | "openai-codex" | "openrouter" | "anthropic" | "ollama" | "gemini";
@@ -596,6 +619,142 @@ function extractResponseId(data: any): string | undefined {
   return undefined;
 }
 
+function filterTopLevelToolNames(registry: AgentRegistry, requestedToolNames?: string[]): string[] {
+  const requested = requestedToolNames && requestedToolNames.length > 0
+    ? requestedToolNames
+    : getAllToolNames();
+  if (registry.all.length > 0) {
+    return [...requested];
+  }
+  const blocked = new Set<string>(AGENT_TOOL_NAMES);
+  return requested.filter((toolName) => !blocked.has(toolName));
+}
+
+function describeAgentStatusEvent(status: {
+  state: string;
+  task: string;
+  result?: string;
+  error?: string;
+}): string {
+  if (status.state === "done") {
+    return (status.result || "").slice(0, 240);
+  }
+  if (status.state === "error") {
+    return status.error || "";
+  }
+  return status.task;
+}
+
+async function createRuntimeContext(
+  config: PatricConfig,
+  onToolEvent?: (event: ToolEvent) => void,
+  runtimeContext?: RuntimeContext
+): Promise<RuntimeContext> {
+  const baseContext: RuntimeContext = {
+    ...runtimeContext,
+    agent: runtimeContext?.agent || { kind: "top-level" }
+  };
+
+  if (baseContext.agent?.kind === "sub-agent") {
+    return {
+      ...baseContext,
+      allowedToolNames: baseContext.allowedToolNames || getAllToolNames().filter((name) => !AGENT_TOOL_NAMES.includes(name as any))
+    };
+  }
+
+  const registry = baseContext.agentRegistry || loadAgentRegistry(process.cwd());
+  const allowedToolNames = filterTopLevelToolNames(registry, baseContext.allowedToolNames);
+
+  if (baseContext.agentManager) {
+    return {
+      ...baseContext,
+      agentRegistry: registry,
+      allowedToolNames,
+      agent: { kind: "top-level" }
+    };
+  }
+
+  const agentManager = createAgentManager({
+    registry,
+    onStatus: (status) => {
+      const spec = registry.byName.get(status.name.trim().toLowerCase());
+      onToolEvent?.({
+        type: "agent_status",
+        name: "agent",
+        agentId: status.id,
+        agentName: status.name,
+        agentState: status.state,
+        detail: spec ? describeAgentStatusEvent(status) : status.task
+      });
+    },
+    runner: async (spec, task, signal, runId) => {
+      const childConfig: PatricConfig = {
+        ...config,
+        model: resolveAgentModel(config, spec)
+      };
+      const childAllowedToolNames = getEffectiveAgentToolNames(
+        spec,
+        allowedToolNames.filter((toolName) => !AGENT_TOOL_NAMES.includes(toolName as any))
+      );
+      return streamCompletion(
+        childConfig,
+        [
+          { role: "system", content: buildAgentSystemPrompt(config.systemPrompt, spec) },
+          { role: "user", content: buildAgentTaskPrompt(task) }
+        ],
+        undefined,
+        (childEvent) => {
+          if (childEvent.type === "tool_start") {
+            onToolEvent?.({
+              type: "agent_tool_start",
+              name: childEvent.name,
+              arguments: childEvent.arguments,
+              agentId: runId,
+              agentName: spec.name,
+            });
+          } else if (childEvent.type === "tool_end") {
+            onToolEvent?.({
+              type: "agent_tool_end",
+              name: childEvent.name,
+              result: childEvent.result,
+              agentId: runId,
+              agentName: spec.name,
+            });
+          }
+        },
+        signal,
+        {
+          allowedToolNames: childAllowedToolNames,
+          agentRegistry: registry,
+          agent: { kind: "sub-agent", name: spec.name }
+        }
+      );
+    }
+  });
+
+  return {
+    ...baseContext,
+    allowedToolNames,
+    agentRegistry: registry,
+    agentManager,
+    agent: { kind: "top-level" }
+  };
+}
+
+function buildEffectiveMessages(messages: ChatMessage[], runtimeContext: RuntimeContext): ChatMessage[] {
+  if (runtimeContext.agent?.kind !== "top-level" || !runtimeContext.agentRegistry || runtimeContext.agentRegistry.all.length === 0) {
+    return messages;
+  }
+
+  return [
+    ...messages,
+    {
+      role: "system",
+      content: formatAgentPromptSummary(runtimeContext.agentRegistry)
+    }
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // OpenAI-compatible (OpenAI, OpenRouter, Ollama-via-OpenAI-compat)
 // ---------------------------------------------------------------------------
@@ -1138,10 +1297,11 @@ async function streamWithToolLoop(
   messages: ChatMessage[],
   onChunk?: (chunk: string) => void,
   onToolEvent?: (event: ToolEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  runtimeContext: RuntimeContext = {}
 ): Promise<CompletionResult> {
   const provider = normalizeProvider(config);
-  const tools = getToolsForProvider(provider);
+  const tools = getToolsForProvider(provider, runtimeContext.allowedToolNames);
 
   let rawMessages: any[];
   let codexInstructions = "";
@@ -1219,7 +1379,10 @@ async function streamWithToolLoop(
     const toolResults: ToolResult[] = [];
     for (const call of providerResponse.toolCalls) {
       onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
-      const result = await executeTool(call);
+      const result = await executeTool(call, {
+        allowedToolNames: runtimeContext.allowedToolNames,
+        agentManager: runtimeContext.agentManager
+      });
       toolResults.push(result);
       onToolEvent?.({
         type: "tool_end",
@@ -1318,14 +1481,24 @@ export async function streamCompletion(
   messages: ChatMessage[],
   onChunk?: (chunk: string) => void,
   onToolEvent?: (event: ToolEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  runtimeContext?: RuntimeContext
 ): Promise<CompletionResult> {
   const configured = await ensureConfigured(config);
   if (!configured.ok) {
     return configured;
   }
 
-  return streamWithToolLoop(config, messages, onChunk, onToolEvent, signal);
+  const resolvedRuntimeContext = await createRuntimeContext(config, onToolEvent, runtimeContext);
+  const effectiveMessages = buildEffectiveMessages(messages, resolvedRuntimeContext);
+  return streamWithToolLoop(
+    config,
+    effectiveMessages,
+    onChunk,
+    onToolEvent,
+    signal,
+    resolvedRuntimeContext
+  );
 }
 
 export async function testConnection(config: PatricConfig): Promise<CompletionResult> {

@@ -1,4 +1,12 @@
 import process from "node:process";
+import {
+  buildAgentSystemPrompt,
+  buildAgentTaskPrompt,
+  formatAgentList,
+  getEffectiveAgentToolNames,
+  loadAgentRegistry,
+  resolveAgentModel
+} from "./agents";
 import type { PatricConfig } from "./config";
 import { clearStoredAuth, getAuthPath, getEffectiveAuthStatus, hasEffectiveAuth, listStoredAuth } from "./auth";
 import {
@@ -14,6 +22,7 @@ import { applyPatch, generatePatch } from "./patch";
 import { startTui } from "./tui";
 import { collectContext, getRepoInfo, listRepoFiles } from "./repo";
 import { streamCompletion, type ToolEvent } from "./provider";
+import { AGENT_TOOL_NAMES, getAllToolNames } from "./tools";
 import { listDir, print, printError, readFileSafe, writeFileSafe, execCommand } from "./utils";
 
 function usage(): string {
@@ -26,6 +35,9 @@ function usage(): string {
     "  patric chat --context <prompt> Include repository context",
     "  patric repo                    Show repository status",
     "  patric context [paths...]      Print repository context",
+    "  patric agents list             List saved sub-agents",
+    "  patric agents show <name>      Show a saved sub-agent definition",
+    "  patric agents run <name> <p>   Run a saved sub-agent directly",
     "  patric patch <prompt>          Generate a patch file from a prompt",
     "  patric apply <patch-file>      Validate and apply a patch file",
     "  patric settings                Open provider/model settings screen",
@@ -77,6 +89,10 @@ async function runChat(config: PatricConfig, rest: string[]): Promise<number> {
         process.stderr.write(`[tool] ${event.name}...\n`);
       } else if (event.type === "tool_end") {
         process.stderr.write(`[tool] ${event.name} done\n`);
+      } else if (event.type === "agent_status") {
+        const agentName = event.agentName || event.agentId || "agent";
+        const state = event.agentState || "unknown";
+        process.stderr.write(`[agent] ${agentName} ${state}\n`);
       }
     }
   );
@@ -86,6 +102,49 @@ async function runChat(config: PatricConfig, rest: string[]): Promise<number> {
   }
   if (!result.ok) {
     print(result.content);
+  }
+  return result.ok ? 0 : 1;
+}
+
+async function runNamedAgent(config: PatricConfig, name: string, task: string): Promise<number> {
+  const registry = loadAgentRegistry(process.cwd());
+  const spec = registry.byName.get(name.trim().toLowerCase());
+  if (!spec) {
+    printError(`Unknown agent: ${name}`);
+    return 1;
+  }
+
+  const allowedToolNames = getEffectiveAgentToolNames(
+    spec,
+    getAllToolNames().filter((toolName) => !AGENT_TOOL_NAMES.includes(toolName as any))
+  );
+  const agentConfig: PatricConfig = {
+    ...config,
+    model: resolveAgentModel(config, spec)
+  };
+  const result = await streamCompletion(
+    agentConfig,
+    [
+      { role: "system", content: buildAgentSystemPrompt(agentConfig.systemPrompt, spec) },
+      { role: "user", content: buildAgentTaskPrompt(task) }
+    ],
+    (chunk: string) => {
+      process.stdout.write(chunk);
+    },
+    undefined,
+    undefined,
+    {
+      allowedToolNames,
+      agentRegistry: registry,
+      agent: { kind: "sub-agent", name: spec.name }
+    }
+  );
+
+  if (result.ok && result.content) {
+    print();
+  }
+  if (!result.ok) {
+    printError(result.content);
   }
   return result.ok ? 0 : 1;
 }
@@ -214,6 +273,60 @@ async function main(): Promise<void> {
 
   if (command === "context") {
     print(collectContext(process.cwd(), rest));
+    return;
+  }
+
+  if (command === "agents") {
+    const subcommand = rest[0];
+    const registry = loadAgentRegistry(process.cwd());
+
+    if (subcommand === "list") {
+      print(formatAgentList(registry));
+      return;
+    }
+
+    if (subcommand === "show") {
+      const name = rest[1];
+      if (!name) {
+        printError("Usage: patric agents show <name>");
+        process.exitCode = 1;
+        return;
+      }
+      const spec = registry.byName.get(name.trim().toLowerCase());
+      if (!spec) {
+        printError(`Unknown agent: ${name}`);
+        process.exitCode = 1;
+        return;
+      }
+      print(
+        [
+          `name: ${spec.name}`,
+          `scope: ${spec.scope}`,
+          `description: ${spec.description}`,
+          `model: ${spec.model || "(inherit active model)"}`,
+          `tools: ${spec.tools === "*" ? "*" : Array.isArray(spec.tools) && spec.tools.length > 0 ? spec.tools.join(", ") : "(inherit parent tools)"}`,
+          `source: ${spec.sourcePath}`,
+          "",
+          spec.prompt || "(no body prompt)"
+        ].join("\n")
+      );
+      return;
+    }
+
+    if (subcommand === "run") {
+      const name = rest[1];
+      const prompt = rest.slice(2).join(" ").trim();
+      if (!name || !prompt) {
+        printError("Usage: patric agents run <name> <prompt>");
+        process.exitCode = 1;
+        return;
+      }
+      process.exitCode = await runNamedAgent(config, name, prompt);
+      return;
+    }
+
+    printError("Usage: patric agents <list|show <name>|run <name> <prompt>>");
+    process.exitCode = 1;
     return;
   }
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import type { AgentManager, AgentRunStatus } from "./agents";
 import { executeBrowserAction } from "./browser";
 
 // ---------------------------------------------------------------------------
@@ -64,17 +65,36 @@ export interface ToolResult {
 }
 
 export interface ToolEvent {
-  type: "tool_start" | "tool_end" | "tool_round_complete";
+  type: "tool_start" | "tool_end" | "tool_round_complete" | "agent_status" | "agent_tool_start" | "agent_tool_end";
   name: string;
   arguments?: Record<string, any>;
   result?: string;
+  agentId?: string;
+  agentName?: string;
+  agentState?: AgentRunStatus["state"];
+  detail?: string;
 }
 
 export const MAX_TOOL_ROUNDS = 20;
 
+export interface ToolExecutionContext {
+  allowedToolNames?: string[];
+  agentManager?: AgentManager;
+}
+
+interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+}
+
 type ProviderName = "openai" | "openai-codex" | "openrouter" | "anthropic" | "ollama" | "gemini";
 
-const TOOL_DEFINITIONS = [
+const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "web_search",
     description:
@@ -252,8 +272,72 @@ const TOOL_DEFINITIONS = [
       },
       required: ["action"]
     }
+  },
+  {
+    name: "spawn_agent",
+    description:
+      "Spawn a sub-agent to handle a delegated task. Sub-agents run concurrently — " +
+      "spawn multiple agents in parallel for independent subtasks (e.g., searching different repos, " +
+      "analyzing different files). Each agent gets its own context and tools. " +
+      "After spawning, use wait_agent to collect results.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Saved sub-agent name" },
+        task: { type: "string", description: "The delegated task for that sub-agent" }
+      },
+      required: ["name", "task"]
+    }
+  },
+  {
+    name: "wait_agent",
+    description:
+      "Wait for a running Patric sub-agent to finish and return its result. Only available to the top-level agent.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "The sub-agent run id returned by spawn_agent" }
+      },
+      required: ["agent_id"]
+    }
+  },
+  {
+    name: "list_agents",
+    description:
+      "List saved sub-agents and any active/completed sub-agent runs. Only available to the top-level agent.",
+    parameters: {
+      type: "object" as const,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "cancel_agent",
+    description:
+      "Cancel a running Patric sub-agent by id. Only available to the top-level agent.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        agent_id: { type: "string", description: "The sub-agent run id to cancel" }
+      },
+      required: ["agent_id"]
+    }
   }
 ];
+
+export function getAllToolNames(): string[] {
+  return TOOL_DEFINITIONS.map((tool) => tool.name);
+}
+
+export const AGENT_TOOL_NAMES = ["spawn_agent", "wait_agent", "list_agents", "cancel_agent"] as const;
+
+function getFilteredToolDefinitions(allowedToolNames?: string[]): ToolDefinition[] {
+  if (!allowedToolNames || allowedToolNames.length === 0) {
+    return TOOL_DEFINITIONS;
+  }
+  const allowed = new Set(allowedToolNames);
+  return TOOL_DEFINITIONS.filter((tool) => allowed.has(tool.name));
+}
 
 export function getToolsForOpenAI(): object[] {
   return TOOL_DEFINITIONS.map((tool) => ({
@@ -295,24 +379,124 @@ function getToolsForGemini(): object[] {
   ];
 }
 
-export function getToolsForProvider(provider: ProviderName): object[] {
+export function getToolsForProvider(provider: ProviderName, allowedToolNames?: string[]): object[] {
+  const filtered = getFilteredToolDefinitions(allowedToolNames);
   switch (provider) {
     case "anthropic":
-      return getToolsForAnthropic();
+      return filtered.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.parameters
+      }));
     case "gemini":
-      return getToolsForGemini();
+      return [
+        {
+          functionDeclarations: filtered.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters
+          }))
+        }
+      ];
     case "openai-codex":
-      return getToolsForOpenAIResponses();
+      return filtered.map((tool) => ({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters
+      }));
     case "openai":
     case "openrouter":
     case "ollama":
     default:
-      return getToolsForOpenAI();
+      return filtered.map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters
+        }
+      }));
   }
 }
 
-export async function executeTool(call: ToolCall): Promise<ToolResult> {
+function formatAgentRun(status: AgentRunStatus): string {
+  const header = `${status.id} ${status.name} [${status.state}]`;
+  const task = `Task: ${status.task}`;
+  if (status.state === "done") {
+    return `${header}\n${task}\n\n${status.result || "(no result)"}`;
+  }
+  if (status.state === "error") {
+    return `${header}\n${task}\n\n${status.error || "Agent failed."}`;
+  }
+  return `${header}\n${task}`;
+}
+
+function requireAgentManager(context?: ToolExecutionContext): AgentManager {
+  if (!context?.agentManager) {
+    throw new Error("Sub-agent runtime is not available in this context.");
+  }
+  return context.agentManager;
+}
+
+function executeSpawnAgent(name: string, task: string, context?: ToolExecutionContext): string {
+  const manager = requireAgentManager(context);
+  const status = manager.spawn(name, task);
+  return `Spawned agent ${status.name} with id ${status.id}.`;
+}
+
+async function executeWaitAgent(agentId: string, context?: ToolExecutionContext): Promise<string> {
+  const manager = requireAgentManager(context);
+  const status = await manager.wait(agentId);
+  return formatAgentRun(status);
+}
+
+function executeListAgents(context?: ToolExecutionContext): string {
+  const manager = requireAgentManager(context);
+  const available = manager.listAvailableAgents();
+  const runs = manager.listRuns();
+  const parts: string[] = [];
+
+  if (available.length === 0) {
+    parts.push("Available agents:\n(none)");
+  } else {
+    parts.push(
+      [
+        "Available agents:",
+        ...available.map((spec) => `- ${spec.name} [${spec.scope}]: ${spec.description}`)
+      ].join("\n")
+    );
+  }
+
+  if (runs.length === 0) {
+    parts.push("Agent runs:\n(none)");
+  } else {
+    parts.push(
+      [
+        "Agent runs:",
+        ...runs.map((status) => `- ${status.id} ${status.name} [${status.state}] ${status.task}`)
+      ].join("\n")
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
+function executeCancelAgent(agentId: string, context?: ToolExecutionContext): string {
+  const manager = requireAgentManager(context);
+  const status = manager.cancel(agentId);
+  return `Cancelled agent ${status.name} (${status.id}).`;
+}
+
+export async function executeTool(
+  call: ToolCall,
+  context?: ToolExecutionContext
+): Promise<ToolResult> {
   try {
+    if (context?.allowedToolNames && !context.allowedToolNames.includes(call.name)) {
+      throw new Error(`Tool not allowed in this context: ${call.name}`);
+    }
+
     let content: string;
     switch (call.name) {
       case "web_search":
@@ -347,6 +531,18 @@ export async function executeTool(call: ToolCall): Promise<ToolResult> {
         break;
       case "browser":
         content = await executeBrowserAction(call.arguments);
+        break;
+      case "spawn_agent":
+        content = executeSpawnAgent(call.arguments.name || "", call.arguments.task || "", context);
+        break;
+      case "wait_agent":
+        content = await executeWaitAgent(call.arguments.agent_id || "", context);
+        break;
+      case "list_agents":
+        content = executeListAgents(context);
+        break;
+      case "cancel_agent":
+        content = executeCancelAgent(call.arguments.agent_id || "", context);
         break;
       default:
         content = `Unknown tool: ${call.name}`;

@@ -13,6 +13,7 @@ connecting to direct OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and G
 - Streaming model output
 - Repository inspection and context collection
 - Patch generation and patch application
+- Saved sub-agents with parallel delegation
 - Local file read and write commands
 - Shell command execution
 - Config file stored at `~/.config/patric/config.json`
@@ -30,6 +31,9 @@ patric chat "summarize this repository"
 patric chat --context "review the current repo"
 patric repo
 patric context package.json src
+patric agents list
+patric agents show reviewer
+patric agents run reviewer "review src/provider.ts for correctness issues"
 patric patch "rename the config loader to settings loader"
 patric apply .patric/patches/20260310-123000.patch
 patric read src/index.js
@@ -137,6 +141,8 @@ Notes:
 - `/exec <command>`
 - `/repo`
 - `/context [paths...]`
+- `/agents`
+- `/agent run <name> <prompt>`
 - `/patch <prompt>`
 - `/apply <patch-file>`
 - `/settings`
@@ -153,3 +159,35 @@ Notes:
 - `src/settings.ts`: full-screen settings UI
 - `src/repo.ts`: repository inspection and context building
 - `src/patch.ts`: patch generation and application helpers
+
+## Sub-Agents
+
+Patric can load saved sub-agents from:
+
+- `.patric/agents/*.md` in the current project
+- `~/.config/patric/agents/*.md` for user-wide agents
+
+Project agents override user agents with the same `name`.
+
+Agent files use Markdown with YAML frontmatter:
+
+```md
+---
+name: reviewer
+description: Review code for bugs and regressions
+tools:
+  - read_file
+  - grep
+  - bash
+model: gpt-5.4
+---
+Focus on correctness, behavioral regressions, and missing tests.
+```
+
+CLI:
+
+- `patric agents list`
+- `patric agents show <name>`
+- `patric agents run <name> <prompt>`
+
+In chat, Patric can automatically delegate to saved agents with `spawn_agent`, `wait_agent`, `list_agents`, and `cancel_agent`.
