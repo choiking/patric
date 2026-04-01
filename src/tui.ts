@@ -601,7 +601,7 @@ export async function startTui(
     const message = { role, content: normalizeNewlines(content) };
     messages.push(message);
     scrollOffset = 0;
-    appendMessageToTranscript(message);
+    scheduleRender();
   };
 
   const addToolMessage = (
@@ -618,7 +618,7 @@ export async function startTui(
       key
     };
     messages.push(message);
-    appendMessageToTranscript(message);
+    scheduleRender();
   };
 
   const updateLastToolMessage = (state: "done" | "error", detail = "") => {
@@ -627,7 +627,7 @@ export async function startTui(
       if (message.role === "tool" && message.state === "running") {
         message.state = state;
         message.detail = normalizeNewlines(detail);
-        appendMessageToTranscript(message);
+        scheduleRender();
         return;
       }
     }
@@ -646,7 +646,7 @@ export async function startTui(
       existing.content = normalizedContent;
       existing.state = state;
       existing.detail = normalizedDetail;
-      appendMessageToTranscript(existing);
+      scheduleRender();
       return;
     }
     addToolMessage(normalizedContent, state, normalizedDetail, key);
@@ -875,10 +875,13 @@ export async function startTui(
       : pctNum >= 70
         ? theme.warning(`context ${pctStr}%`)
         : theme.muted(`context ${pctStr}%`);
-    const lines = [
-      `${theme.prompt(">")} ${truncateAnsi(prompt, Math.max(12, width - 2))}`,
-      contextLabel
-    ];
+
+    const rule = theme.border("─".repeat(width));
+    const inputLine = `${theme.prompt(">")} ${truncateAnsi(prompt, Math.max(12, width - 2))}`;
+    const ruleBottom = theme.border("─".repeat(width));
+    const footer = alignSides(` ${theme.muted("/help · /settings")}`, `${contextLabel} `, width);
+
+    const lines = [rule, inputLine, ruleBottom, footer];
     for (const line of renderSlashMenu()) {
       lines.push(truncateAnsi(line, width));
     }
@@ -905,9 +908,9 @@ export async function startTui(
     if (spinnerTimer) clearInterval(spinnerTimer);
     spinnerTimer = setInterval(() => {
       spinnerFrame = (spinnerFrame + 1) % spinnerFrames.length;
-      renderSpinnerPrompt();
+      render();
     }, 80);
-    renderSpinnerPrompt();
+    render();
   };
 
   const stopSpinner = () => {
@@ -915,6 +918,7 @@ export async function startTui(
       clearInterval(spinnerTimer);
       spinnerTimer = null;
     }
+    // No need to clear prompt block — fullscreen render() handles it
     clearPromptBlock();
   };
 
@@ -1111,7 +1115,6 @@ export async function startTui(
   const openSettingsScreen = () => {
     syncDraftConfig();
     syncDraftAuth();
-    clearPromptBlock();
     mode = "settings";
     overlayStatus = "";
     settingsIndex = 0;
@@ -1432,22 +1435,149 @@ export async function startTui(
     );
   };
 
+  // Throttled render for streaming
+  let renderTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleRender = () => {
+    if (!renderTimer) {
+      renderTimer = setTimeout(() => {
+        renderTimer = null;
+        render();
+      }, 16);
+    }
+  };
+
   const render = () => {
     if (!isActive) {
       return;
     }
-    if (mode === "chat") {
-      renderChatPrompt();
+    const rows = process.stdout.rows || 30;
+    const columns = process.stdout.columns || 100;
+    const width = Math.max(20, columns - 4);
+
+    if (mode !== "chat") {
+      // Settings: use existing fullscreen overlay
+      let frameLines = renderSettingsOverlay();
+      while (frameLines.length < rows) frameLines.push("");
+      frameLines = frameLines.slice(0, rows);
+      process.stdout.write("\x1b[H" + frameLines.map((line) => line + "\x1b[K").join("\n"));
       return;
     }
-    const rows = process.stdout.rows || 30;
-    const frameLines = renderSettingsOverlay().slice(0, rows);
-    while (frameLines.length < rows) {
-      frameLines.push("");
+
+    // Chat mode: simple transcript layout (intro + messages + prompt)
+    // Build the prompt lines (always visible at bottom)
+    let promptLines: string[];
+    if (isBusy) {
+      const rule = theme.border("─".repeat(width));
+      const inputLine = `${theme.muted(">")}`;
+      const footerRight = theme.muted("esc to interrupt");
+      const footer = alignSides(` `, `${footerRight} `, width);
+      const ruleBottom = theme.border("─".repeat(width));
+      promptLines = [rule, inputLine, ruleBottom, footer];
+    } else {
+      promptLines = getChatPromptLines();
     }
 
-    clearScreen();
-    process.stdout.write(frameLines.join("\n"));
+    // Build transcript: intro + messages
+    const transcript: string[] = [];
+
+    // Intro
+    const activeConfig = getActiveChatConfig();
+    const modelInfo = activeConfig.model
+      ? `${activeConfig.provider}/${activeConfig.model}`
+      : `${activeConfig.provider}/(not set)`;
+    const authStatus = getEffectiveAuthStatus(activeConfig.provider, {
+      apiKey: activeConfig.apiKey,
+      oauthToken: activeConfig.oauthToken
+    });
+    transcript.push(
+      `${theme.title("Patric")} ${theme.faint("v0.3.0")}`,
+      `${theme.muted("cwd")} ${cwd}`,
+      `${theme.muted("model")} ${modelInfo}`,
+      `${theme.muted("auth")} ${authStatus}`,
+      theme.muted("Use /help for commands or /settings to configure."),
+      ""
+    );
+
+    // Messages
+    for (const message of messages) {
+      if (message.role === "user") {
+        if (transcript.length > 0 && transcript[transcript.length - 1] !== "") {
+          transcript.push("");
+        }
+        const wrapped = wrapText(message.content, Math.max(10, width - 2));
+        transcript.push(`${theme.prompt(">")} ${theme.user(wrapped[0] || "")}`);
+        for (let i = 1; i < wrapped.length; i++) {
+          transcript.push(`  ${theme.user(wrapped[i])}`);
+        }
+      } else if (message.role === "assistant") {
+        const mdLines = renderMarkdown(message.content, Math.max(10, width));
+        for (const line of mdLines) transcript.push(line);
+        transcript.push("");
+      } else if (message.role === "tool" && message.key === "agent-group") {
+        const lines = message.content.split("\n");
+        const color = message.state === "running" ? theme.muted
+          : message.state === "error" ? theme.error : theme.system;
+        const icon = message.state === "running" ? theme.muted("⏺")
+          : message.state === "error" ? theme.error("⏺") : theme.success("⏺");
+        for (let li = 0; li < lines.length; li++) {
+          transcript.push(li === 0 ? `${icon} ${color(lines[li])}` : `  ${color(lines[li])}`);
+        }
+      } else if (message.role === "tool") {
+        const icon = message.state === "running" ? theme.muted("⏺")
+          : message.state === "error" ? theme.error("⏺") : theme.success("⏺");
+        const body = message.state === "error" ? theme.error
+          : message.state === "running" ? theme.muted : theme.system;
+        for (const line of wrapText(message.content, Math.max(10, width - 3))) {
+          transcript.push(`${icon} ${body(line)}`);
+        }
+        if (message.detail && message.state === "error") {
+          for (const line of wrapText(message.detail, Math.max(10, width - 5))) {
+            transcript.push(`  ${theme.error(line)}`);
+          }
+        }
+      } else if (message.role === "error" || message.role === "status") {
+        const label = message.role === "error" ? theme.error("⏺") : theme.muted("⏺");
+        const body = message.role === "error" ? theme.error : theme.system;
+        for (const line of wrapText(message.content, Math.max(10, width - 3))) {
+          transcript.push(`${label} ${body(line)}`);
+        }
+      }
+    }
+
+    // Show thinking indicator in transcript when busy
+    if (isBusy) {
+      const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
+      transcript.push("");
+      const thinkingLeft = `  ${theme.muted(`${frame} Thinking...`)}`;
+      const thinkingRight = activeToolStatus ? theme.muted(activeToolStatus) : "";
+      transcript.push(thinkingRight ? alignSides(thinkingLeft, `${thinkingRight} `, width) : thinkingLeft);
+    }
+
+    // Remove trailing blanks from transcript
+    while (transcript.length > 0 && transcript[transcript.length - 1] === "") {
+      transcript.pop();
+    }
+
+    // Window transcript into available height (above fixed prompt)
+    const availableHeight = Math.max(1, rows - promptLines.length);
+    const total = transcript.length;
+    const maxScroll = Math.max(0, total - availableHeight);
+    scrollOffset = Math.min(scrollOffset, maxScroll);
+    const start = Math.max(0, total - availableHeight - scrollOffset);
+    const visible = transcript.slice(start, start + availableHeight);
+
+    // Pad to fill available height
+    while (visible.length < availableHeight) {
+      visible.push("");
+    }
+
+    // Append fixed prompt at screen bottom
+    visible.push(...promptLines);
+
+    // Write frame
+    process.stdout.write(
+      "\x1b[H" + visible.slice(0, rows).map((line) => line + "\x1b[K").join("\n")
+    );
   };
 
   const resetInput = () => {
@@ -1524,10 +1654,6 @@ export async function startTui(
     editingField = null;
     editingBuffer = "";
     overlayStatus = "";
-    if (isInAltScreen) {
-      leaveAltScreen();
-      isInAltScreen = false;
-    }
     if (closeAfterSettings) {
       shouldExit = true;
       return;
@@ -1536,7 +1662,7 @@ export async function startTui(
       messages.push({ role: "status", content: normalizeNewlines(status) });
       scrollOffset = 0;
     }
-    redrawChatScreen();
+    render();
   };
 
   const commitEditingField = () => {
@@ -1623,7 +1749,7 @@ export async function startTui(
           stopSpinner();
         }
         ensureAssistantMessage().content += chunk;
-        writeTranscript(chunk);
+        scheduleRender();
         streamedAssistantOutput = true;
       },
       (event) => {
@@ -1645,22 +1771,17 @@ export async function startTui(
     activeToolStatus = "";
 
     if (streamedAssistantOutput) {
-      if (!transcriptEndsWithNewline) {
-        writeTranscript("\n");
-      }
-      writeTranscript("\n");
+      render();
     }
 
     if (!result.ok) {
       if (!liveAssistantMessage) {
         liveAssistantMessage = { role: "error", content: result.content };
         messages.push(liveAssistantMessage);
-        appendMessageToTranscript(liveAssistantMessage);
       } else {
         liveAssistantMessage.role = "error";
         liveAssistantMessage.content = result.content;
         if (!streamedAssistantOutput) {
-          appendMessageToTranscript(liveAssistantMessage);
         }
       }
       return;
@@ -1669,7 +1790,6 @@ export async function startTui(
     if (!liveAssistantMessage && result.content) {
       liveAssistantMessage = { role: "assistant", content: result.content };
       messages.push(liveAssistantMessage);
-      appendMessageToTranscript(liveAssistantMessage);
     }
   };
 
@@ -1805,8 +1925,8 @@ export async function startTui(
     const turnStartIndex = messages.length;
     agentRuns.clear();
     isBusy = true;
-    addMessage("user", command);
-    render();
+    messages.push({ role: "user", content: normalizeNewlines(command) });
+    scrollOffset = 0;
     startSpinner();
     let liveAssistantMessage: Message | null = null;
     let streamedAssistantOutput = false;
@@ -1829,7 +1949,7 @@ export async function startTui(
     const result = await streamCompletion(runtimeConfig, llmMessages, (chunk) => {
       if (!streamedAssistantOutput) stopSpinner();
       ensureAssistantMessage().content += chunk;
-      redrawChatScreen();
+      scheduleRender();
       streamedAssistantOutput = true;
     }, (event) => {
       if (event.type === "tool_start") {
@@ -1842,26 +1962,21 @@ export async function startTui(
     isBusy = false;
     activeToolStatus = "";
     if (streamedAssistantOutput) {
-      redrawChatScreen();
+      render();
     }
     if (!result.ok) {
       if (!liveAssistantMessage) {
         liveAssistantMessage = { role: "error", content: result.content };
         messages.push(liveAssistantMessage);
-        appendMessageToTranscript(liveAssistantMessage);
       } else {
         liveAssistantMessage.role = "error";
         liveAssistantMessage.content = result.content;
-        if (!streamedAssistantOutput) {
-          appendMessageToTranscript(liveAssistantMessage);
-        }
       }
     } else {
       const assistantReply = getTurnAssistantReply();
       if (!assistantReply && !liveAssistantMessage && result.content) {
         liveAssistantMessage = { role: "assistant", content: result.content };
         messages.push(liveAssistantMessage);
-        appendMessageToTranscript(liveAssistantMessage);
       }
       const historyReply = getTurnAssistantReply();
       if (historyReply) {
@@ -2037,6 +2152,26 @@ export async function startTui(
       }
       return;
     }
+    // Shift+Up / Shift+Down — scroll by one line
+    if (inputKey === "\u001b[1;2A") {
+      scrollOffset += 1;
+      return;
+    }
+    if (inputKey === "\u001b[1;2B") {
+      scrollOffset = Math.max(0, scrollOffset - 1);
+      return;
+    }
+    // Page Up / Page Down — scroll by half a screen
+    if (inputKey === "\u001b[5~") {
+      const rows = process.stdout.rows || 24;
+      scrollOffset += Math.max(1, Math.floor(rows / 2));
+      return;
+    }
+    if (inputKey === "\u001b[6~") {
+      const rows = process.stdout.rows || 24;
+      scrollOffset = Math.max(0, scrollOffset - Math.max(1, Math.floor(rows / 2)));
+      return;
+    }
     if (inputKey === "\u001b[A") {
       if (suggestions.length > 0) {
         slashIndex = (slashIndex - 1 + suggestions.length) % suggestions.length;
@@ -2114,7 +2249,25 @@ export async function startTui(
     if (!isActive || isBusy && mode === "settings") {
       return;
     }
-    const events = splitInputSequence(chunk.toString("utf8"));
+    const raw = chunk.toString("utf8");
+    // Handle SGR mouse wheel events: \x1b[<btn;col;rowM
+    // btn 64 = wheel up, btn 65 = wheel down
+    const mouseMatch = raw.match(/^\x1b\[<(\d+);\d+;\d+[Mm]$/);
+    if (mouseMatch) {
+      const btn = parseInt(mouseMatch[1], 10);
+      if (btn === 64) { // wheel up
+        scrollOffset += 3;
+        render();
+        return;
+      }
+      if (btn === 65) { // wheel down
+        scrollOffset = Math.max(0, scrollOffset - 3);
+        render();
+        return;
+      }
+      return; // ignore other mouse events
+    }
+    const events = splitInputSequence(raw);
     for (const value of events) {
       if (mode === "chat") {
         await handleChatKey(value);
@@ -2135,24 +2288,25 @@ export async function startTui(
     }
     isActive = false;
     stopSpinner();
+    if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
     closeBrowser().catch(() => {});
     process.stdin.off("data", onData);
-    clearPromptBlock();
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);
     }
-    if (isInAltScreen) {
-      leaveAltScreen();
-      isInAltScreen = false;
-    }
+    // Disable mouse tracking, show cursor, leave alt-screen
+    process.stdout.write("\x1b[?1006l\x1b[?1000l");
     setCursorHidden(false);
+    leaveAltScreen();
     process.stdout.write("\x1b[2mGoodbye.\x1b[0m\n");
   };
 
+  // Enter alt-screen, hide cursor, enable SGR mouse tracking
+  process.stdout.write("\x1b[?1049h");
   setCursorHidden(true);
-  if (mode !== "settings") {
-    printChatIntro();
-  }
+  process.stdout.write("\x1b[?1000h\x1b[?1006h");
+  isInAltScreen = true;
+  introPrinted = true; // skip inline intro since we use fullscreen renderChatFrame
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on("data", onData);
