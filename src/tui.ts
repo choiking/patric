@@ -524,7 +524,7 @@ function getModelOptions(config: PatricConfig, discovered: string[] = []): strin
 
 export async function startTui(
   config: PatricConfig,
-  options?: { openSettings?: boolean; closeAfterSettings?: boolean }
+  options?: { openSettings?: boolean; closeAfterSettings?: boolean; instructionSources?: import("./instructions").InstructionSources }
 ): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("Patric TUI requires an interactive terminal.");
@@ -588,6 +588,19 @@ export async function startTui(
   const messages: Message[] = [];
 
   const llmMessages: ChatMessage[] = [{ role: "system", content: config.systemPrompt }];
+
+  if (options?.instructionSources) {
+    const s = options.instructionSources;
+    const loaded = [
+      s.user && "USER.md",
+      s.soul && "SOUL.md",
+      s.patricUser && "PATRIC.md (user)",
+      s.patric && "PATRIC.md (project)",
+    ].filter(Boolean);
+    if (loaded.length) {
+      messages.push({ role: "status", content: `Loaded: ${loaded.join(", ")}` });
+    }
+  }
 
   const getSlashSuggestions = () => {
     if (!input.startsWith("/")) {

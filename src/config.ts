@@ -40,7 +40,8 @@ const DEFAULT_CONFIG: PatricConfig = {
     "Use these tools proactively to explore the codebase, make edits, and verify your work. " +
     "Prefer edit_file for surgical changes and write_file only for new files or complete rewrites. " +
     "For browser tasks: navigate to a page, take a snapshot to see numbered element refs, " +
-    "then use click/type/select with ref numbers to interact with the page.",
+    "then use click/type/select with ref numbers to interact with the page. " +
+    "You have read_memory and save_memory tools for persistent memory (USER.md, SOUL.md, PATRIC.md).",
   recentModels: {}
 };
 

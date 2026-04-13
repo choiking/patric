@@ -322,6 +322,48 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       },
       required: ["agent_id"]
     }
+  },
+  {
+    name: "save_memory",
+    description:
+      "Save information about the user or project to persistent memory files. " +
+      "Use this proactively when the user shares personal details (name, role, preferences) " +
+      "or project context worth remembering across sessions. " +
+      "Target 'user' writes to ~/.config/patric/USER.md (personal identity, preferences). " +
+      "Target 'soul' writes to ~/.config/patric/SOUL.md (personality/tone). " +
+      "Target 'project' writes to PATRIC.md in the project root (project instructions/conventions).",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        target: {
+          type: "string",
+          enum: ["user", "soul", "project"],
+          description: "Which memory file to update: 'user' (USER.md), 'soul' (SOUL.md), or 'project' (PATRIC.md)"
+        },
+        content: {
+          type: "string",
+          description: "The full updated content for the memory file (markdown format). Use read_memory first, then write the updated version."
+        }
+      },
+      required: ["target", "content"]
+    }
+  },
+  {
+    name: "read_memory",
+    description:
+      "Read a persistent memory file. Use this before save_memory to get current contents. " +
+      "Target 'user' reads ~/.config/patric/USER.md, 'soul' reads ~/.config/patric/SOUL.md, 'project' reads PATRIC.md.",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        target: {
+          type: "string",
+          enum: ["user", "soul", "project"],
+          description: "Which memory file to read: 'user' (USER.md), 'soul' (SOUL.md), or 'project' (PATRIC.md)"
+        }
+      },
+      required: ["target"]
+    }
   }
 ];
 
@@ -543,6 +585,12 @@ export async function executeTool(
         break;
       case "cancel_agent":
         content = executeCancelAgent(call.arguments.agent_id || "", context);
+        break;
+      case "save_memory":
+        content = executeSaveMemory(call.arguments.target || "", call.arguments.content || "");
+        break;
+      case "read_memory":
+        content = executeReadMemory(call.arguments.target || "");
         break;
       default:
         content = `Unknown tool: ${call.name}`;
@@ -776,6 +824,30 @@ function executeReadFile(filePath: string, offset?: number, limit?: number): str
     `${String(startLine + i).padStart(6, " ")}  ${line}`
   );
   return truncateOutput(numbered.join("\n"));
+}
+
+const MEMORY_TARGETS: Record<string, () => string> = {
+  user: () => path.join(os.homedir(), ".config", "patric", "USER.md"),
+  soul: () => path.join(os.homedir(), ".config", "patric", "SOUL.md"),
+  project: () => path.join(process.cwd(), "PATRIC.md"),
+};
+
+function executeReadMemory(target: string): string {
+  const resolver = MEMORY_TARGETS[target];
+  if (!resolver) return `Error: unknown target "${target}". Use: user, soul, or project`;
+  const filePath = resolver();
+  if (!fs.existsSync(filePath)) return `(empty — file does not exist yet: ${filePath})`;
+  return fs.readFileSync(filePath, "utf8");
+}
+
+function executeSaveMemory(target: string, content: string): string {
+  if (!content.trim()) return "Error: content cannot be empty";
+  const resolver = MEMORY_TARGETS[target];
+  if (!resolver) return `Error: unknown target "${target}". Use: user, soul, or project`;
+  const filePath = resolver();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+  return `Saved ${target} memory to ${filePath} (${Buffer.byteLength(content, "utf8")} bytes)`;
 }
 
 function executeWriteFile(filePath: string, content: string): string {

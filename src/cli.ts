@@ -8,6 +8,7 @@ import {
   resolveAgentModel
 } from "./agents";
 import type { PatricConfig } from "./config";
+import { loadInstructions, applyInstructions } from "./instructions";
 import { clearStoredAuth, getAuthPath, getEffectiveAuthStatus, hasEffectiveAuth, listStoredAuth } from "./auth";
 import {
   configureProvider,
@@ -171,9 +172,11 @@ function printSetupHint(config: PatricConfig): void {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const config = loadConfig();
+  const { text: instructions, sources: instructionSources } = loadInstructions(process.cwd());
+  config.systemPrompt = applyInstructions(config.systemPrompt, instructions);
 
   if (args.length === 0) {
-    await startTui(config);
+    await startTui(config, { instructionSources });
     return;
   }
 

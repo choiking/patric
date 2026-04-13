@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   getDefaultBaseUrl,
   getModelCompatibilityError,
@@ -741,18 +742,30 @@ async function createRuntimeContext(
   };
 }
 
-function buildEffectiveMessages(messages: ChatMessage[], runtimeContext: RuntimeContext): ChatMessage[] {
-  if (runtimeContext.agent?.kind !== "top-level" || !runtimeContext.agentRegistry || runtimeContext.agentRegistry.all.length === 0) {
-    return messages;
-  }
+const MEMORY_REMINDER = `MEMORY SYSTEM: You have read_memory and save_memory tools. You MUST use them when the user shares ANY personal info or preferences about themselves or about your personality/behavior.
+- "my name is X" / "call me X" / "I'm a Y" → read_memory('user') then save_memory('user', updated)
+- "your name is X" / "be more casual" / "speak like X" → read_memory('soul') then save_memory('soul', updated)
+- project conventions or rules → read_memory('project') then save_memory('project', updated)
+ALWAYS call the tools. Never just acknowledge without saving.`;
 
-  return [
-    ...messages,
-    {
+function buildEffectiveMessages(messages: ChatMessage[], runtimeContext: RuntimeContext): ChatMessage[] {
+  const extra: ChatMessage[] = [];
+
+  if (runtimeContext.agent?.kind === "top-level" && runtimeContext.agentRegistry && runtimeContext.agentRegistry.all.length > 0) {
+    extra.push({
       role: "system",
       content: formatAgentPromptSummary(runtimeContext.agentRegistry)
-    }
-  ];
+    });
+  }
+
+  if (runtimeContext.agent?.kind === "top-level") {
+    extra.push({
+      role: "system",
+      content: MEMORY_REMINDER
+    });
+  }
+
+  return extra.length > 0 ? [...messages, ...extra] : messages;
 }
 
 // ---------------------------------------------------------------------------
@@ -1292,6 +1305,13 @@ function convertToGeminiFormat(messages: ChatMessage[]): any[] {
 // Unified tool-use loop
 // ---------------------------------------------------------------------------
 
+function debugLog(msg: string): void {
+  if (process.env.PATRIC_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    fs.appendFileSync("/tmp/patric-debug.log", `[${ts}] ${msg}\n`);
+  }
+}
+
 async function streamWithToolLoop(
   config: PatricConfig,
   messages: ChatMessage[],
@@ -1328,6 +1348,7 @@ async function streamWithToolLoop(
 
   try {
   for (let iteration = 0; iteration < MAX_TOOL_ROUNDS; iteration++) {
+    debugLog(`--- iteration ${iteration} start (provider=${provider})`);
     let providerResponse: ProviderResponse;
 
     switch (provider) {
@@ -1355,7 +1376,10 @@ async function streamWithToolLoop(
         break;
     }
 
+    debugLog(`iteration ${iteration} response: ok=${providerResponse.ok} content=${providerResponse.content.slice(0, 100)} toolCalls=${providerResponse.toolCalls.length}`);
+
     if (!providerResponse.ok) {
+      debugLog(`iteration ${iteration} error: ${providerResponse.error}`);
       return { ok: false, content: providerResponse.error || "Provider error" };
     }
 
@@ -1378,12 +1402,14 @@ async function streamWithToolLoop(
     usedTools = true;
     const toolResults: ToolResult[] = [];
     for (const call of providerResponse.toolCalls) {
+      debugLog(`tool_start: ${call.name} args=${JSON.stringify(call.arguments).slice(0, 200)}`);
       onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
       const result = await executeTool(call, {
         allowedToolNames: runtimeContext.allowedToolNames,
         agentManager: runtimeContext.agentManager
       });
       toolResults.push(result);
+      debugLog(`tool_end: ${call.name} ok=${result.ok} result=${result.content.slice(0, 200)}`);
       onToolEvent?.({
         type: "tool_end",
         name: call.name,
