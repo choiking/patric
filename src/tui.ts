@@ -575,11 +575,19 @@ export async function startTui(
   // Permission prompt state
   let permissionResolver: ((decision: PermissionDecision) => void) | null = null;
   let permissionRequest: PermissionRequest | null = null;
+  let permissionIndex = 0;
+  const PERMISSION_OPTIONS: { label: string; decision: PermissionDecision }[] = [
+    { label: "Allow", decision: "allow-once" },
+    { label: "Allow for session", decision: "allow-session" },
+    { label: "Always allow", decision: "allow-always" },
+    { label: "Deny", decision: "deny" },
+  ];
 
   const showPermissionPrompt = (request: PermissionRequest): Promise<PermissionDecision> => {
     return new Promise<PermissionDecision>((resolve) => {
       permissionRequest = request;
       permissionResolver = resolve;
+      permissionIndex = 0;
       render();
     });
   };
@@ -1238,20 +1246,23 @@ export async function startTui(
       const vis = visibleWidth(text);
       return vis < w ? text + " ".repeat(w - vis) : text;
     };
-    const border = theme.border;
-    const top = border(`\u250c\u2500 ${theme.warning("Allow tool?")} ` + border("\u2500".repeat(Math.max(0, innerWidth - 15))) + border("\u2510"));
-    const bot = border("\u2514" + "\u2500".repeat(innerWidth + 2) + "\u2518");
-    const line = (text: string) => border("\u2502") + " " + pad(text, innerWidth) + " " + border("\u2502");
+    const b = theme.border;
+    const top = b("\u250c\u2500 ") + theme.warning("Allow tool?") + " " + b("\u2500".repeat(Math.max(0, innerWidth - 15))) + b("\u2510");
+    const bot = b("\u2514" + "\u2500".repeat(innerWidth + 2) + "\u2518");
+    const line = (text: string) => b("\u2502") + " " + pad(text, innerWidth) + " " + b("\u2502");
     const summaryText = permissionRequest.summary.length > innerWidth
       ? permissionRequest.summary.slice(0, innerWidth - 3) + "..."
       : permissionRequest.summary;
+    const optionLines = PERMISSION_OPTIONS.map((opt, i) => {
+      const marker = i === permissionIndex ? theme.accent(">") : " ";
+      const label = i === permissionIndex ? theme.selected(` ${opt.label} `) : ` ${opt.label}`;
+      return line(`${marker} ${label}`);
+    });
     return [
       top,
       line(theme.accentStrong(summaryText)),
       line(""),
-      line(
-        `${theme.key("[Y]")} Allow  ${theme.key("[S]")} Session  ${theme.key("[A]")} Always  ${theme.key("[N]")} Deny`
-      ),
+      ...optionLines,
       bot,
     ];
   };
@@ -2375,11 +2386,24 @@ export async function startTui(
     if (permissionResolver) {
       const events = splitInputSequence(raw);
       for (const value of events) {
-        const lower = value.toLowerCase();
-        if (lower === "y") resolvePermission("allow-once");
-        else if (lower === "s") resolvePermission("allow-session");
-        else if (lower === "a") resolvePermission("allow-always");
-        else if (lower === "n" || value === "\u001b") resolvePermission("deny");
+        if (value === "\x1b[A") { // Up arrow
+          permissionIndex = (permissionIndex - 1 + PERMISSION_OPTIONS.length) % PERMISSION_OPTIONS.length;
+          render();
+        } else if (value === "\x1b[B") { // Down arrow
+          permissionIndex = (permissionIndex + 1) % PERMISSION_OPTIONS.length;
+          render();
+        } else if (value === "\r" || value === "\n") { // Enter
+          resolvePermission(PERMISSION_OPTIONS[permissionIndex].decision);
+        } else if (value === "\u001b") { // Escape = deny
+          resolvePermission("deny");
+        } else {
+          // Keep shortcut keys as fallback
+          const lower = value.toLowerCase();
+          if (lower === "y") resolvePermission("allow-once");
+          else if (lower === "s") resolvePermission("allow-session");
+          else if (lower === "a") resolvePermission("allow-always");
+          else if (lower === "n") resolvePermission("deny");
+        }
       }
       return;
     }
@@ -2427,5 +2451,29 @@ export async function startTui(
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on("data", onData);
+
+  // Ensure terminal modes (mouse tracking, alt-screen, cursor) are restored
+  // even on abnormal exits: SIGINT/SIGTERM/SIGHUP, uncaught exceptions, or
+  // normal process termination that bypasses the /exit command path.
+  const onSignal = (signal: NodeJS.Signals, exitCode: number) => {
+    cleanup();
+    process.exit(exitCode);
+  };
+  const sigintHandler = () => onSignal("SIGINT", 130);
+  const sigtermHandler = () => onSignal("SIGTERM", 143);
+  const sighupHandler = () => onSignal("SIGHUP", 129);
+  const exitHandler = () => { cleanup(); };
+  const uncaughtHandler = (err: unknown) => {
+    cleanup();
+    // eslint-disable-next-line no-console
+    console.error(err);
+    process.exit(1);
+  };
+  process.once("SIGINT", sigintHandler);
+  process.once("SIGTERM", sigtermHandler);
+  process.once("SIGHUP", sighupHandler);
+  process.once("exit", exitHandler);
+  process.once("uncaughtException", uncaughtHandler);
+
   render();
 }
