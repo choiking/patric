@@ -1319,6 +1319,36 @@ function debugLog(msg: string): void {
   fs.appendFileSync("/tmp/patric-debug.log", `[${ts}] ${msg}\n`);
 }
 
+function sanitizeProviderErrorMessage(message: string): string {
+  return message
+    .replace(
+      /\s*For more information, pass `verbose: true` in the second argument to fetch\(\)\s*$/u,
+      ""
+    )
+    .trim();
+}
+
+function formatProviderRuntimeError(error: unknown): string {
+  const rawMessage =
+    error instanceof Error
+      ? error.message || error.name
+      : typeof error === "string"
+        ? error
+        : String(error);
+  const message = sanitizeProviderErrorMessage(rawMessage);
+  return message ? `Provider request failed: ${message}` : "Provider request failed.";
+}
+
+function logProviderException(scope: string, error: unknown): void {
+  const detail =
+    error instanceof Error
+      ? error.stack || error.message
+      : typeof error === "string"
+        ? error
+        : String(error);
+  debugLog(`${scope}: ${sanitizeProviderErrorMessage(detail || "unknown error")}`);
+}
+
 async function streamWithToolLoop(
   config: PatricConfig,
   messages: ChatMessage[],
@@ -1354,151 +1384,152 @@ async function streamWithToolLoop(
   let usedTools = false;
 
   try {
-  for (let iteration = 0; iteration < MAX_TOOL_ROUNDS; iteration++) {
-    debugLog(`--- iteration ${iteration} start (provider=${provider})`);
-    let providerResponse: ProviderResponse;
+    for (let iteration = 0; iteration < MAX_TOOL_ROUNDS; iteration++) {
+      debugLog(`--- iteration ${iteration} start (provider=${provider})`);
+      let providerResponse: ProviderResponse;
 
-    switch (provider) {
-      case "anthropic":
-        providerResponse = await streamAnthropicWithTools(config, rawMessages, tools, onChunk, signal);
-        break;
-      case "gemini":
-        providerResponse = await streamGeminiWithTools(config, rawMessages, tools, onChunk, signal);
-        break;
-      case "openai-codex":
-        providerResponse = await streamOpenAICodexWithTools(
-          config,
-          codexInstructions,
-          rawMessages,
-          tools,
-          onChunk,
-          signal
-        );
-        break;
-      case "ollama":
-      case "openrouter":
-      case "openai":
-      default:
-        providerResponse = await streamOpenAIWithTools(config, rawMessages, tools, onChunk, signal);
-        break;
-    }
-
-    debugLog(`iteration ${iteration} response: ok=${providerResponse.ok} content=${providerResponse.content.slice(0, 100)} toolCalls=${providerResponse.toolCalls.length}`);
-
-    if (!providerResponse.ok) {
-      debugLog(`iteration ${iteration} error: ${providerResponse.error}`);
-      return { ok: false, content: providerResponse.error || "Provider error" };
-    }
-
-    fullContent += providerResponse.content;
-
-    if (providerResponse.toolCalls.length === 0) {
-      if (providerResponse.content.trim()) {
-        return { ok: true, content: fullContent };
+      switch (provider) {
+        case "anthropic":
+          providerResponse = await streamAnthropicWithTools(config, rawMessages, tools, onChunk, signal);
+          break;
+        case "gemini":
+          providerResponse = await streamGeminiWithTools(config, rawMessages, tools, onChunk, signal);
+          break;
+        case "openai-codex":
+          providerResponse = await streamOpenAICodexWithTools(
+            config,
+            codexInstructions,
+            rawMessages,
+            tools,
+            onChunk,
+            signal
+          );
+          break;
+        case "ollama":
+        case "openrouter":
+        case "openai":
+        default:
+          providerResponse = await streamOpenAIWithTools(config, rawMessages, tools, onChunk, signal);
+          break;
       }
-      if (usedTools) {
-        return {
-          ok: false,
-          content: "Provider finished without a final answer after using tools."
-        };
+
+      debugLog(`iteration ${iteration} response: ok=${providerResponse.ok} content=${providerResponse.content.slice(0, 100)} toolCalls=${providerResponse.toolCalls.length}`);
+
+      if (!providerResponse.ok) {
+        debugLog(`iteration ${iteration} error: ${providerResponse.error}`);
+        return { ok: false, content: providerResponse.error || "Provider error" };
       }
-      return { ok: false, content: "Provider returned no assistant message." };
-    }
 
-    // Execute tool calls
-    usedTools = true;
-    const toolResults: ToolResult[] = [];
-    for (const call of providerResponse.toolCalls) {
-      debugLog(`tool_start: ${call.name} args=${JSON.stringify(call.arguments).slice(0, 200)}`);
+      fullContent += providerResponse.content;
 
-      // Permission check
-      if (runtimeContext.permissionState) {
-        debugLog(`permission_check: ${call.name} (has permissionState)`);
-        const summary = formatPermissionSummary(call.name, call.arguments);
-        const permResult = await runtimeContext.permissionState.checkPermission({
-          toolName: call.name,
-          arguments: call.arguments,
-          summary,
-        });
-        debugLog(`permission_result: ${call.name} allowed=${permResult.allowed} decision=${permResult.decision}`);
-        if (!permResult.allowed) {
-          toolResults.push({
-            callId: call.id,
-            name: call.name,
-            content: `Permission denied: the user declined to allow "${call.name}". Try an alternative approach or ask the user to perform this action manually.`,
-            ok: false,
-          });
-          onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
-          onToolEvent?.({ type: "tool_end", name: call.name, result: "Permission denied by user" });
-          continue;
+      if (providerResponse.toolCalls.length === 0) {
+        if (providerResponse.content.trim()) {
+          return { ok: true, content: fullContent };
         }
+        if (usedTools) {
+          return {
+            ok: false,
+            content: "Provider finished without a final answer after using tools."
+          };
+        }
+        return { ok: false, content: "Provider returned no assistant message." };
       }
 
-      onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
-      const result = await executeTool(call, {
-        allowedToolNames: runtimeContext.allowedToolNames,
-        agentManager: runtimeContext.agentManager
-      });
-      toolResults.push(result);
-      debugLog(`tool_end: ${call.name} ok=${result.ok} result=${result.content.slice(0, 200)}`);
-      onToolEvent?.({
-        type: "tool_end",
-        name: call.name,
-        result: result.content.slice(0, 300)
-      });
-    }
-    onToolEvent?.({
-      type: "tool_round_complete",
-      name: providerResponse.toolCalls[providerResponse.toolCalls.length - 1]?.name || ""
-    });
+      // Execute tool calls
+      usedTools = true;
+      const toolResults: ToolResult[] = [];
+      for (const call of providerResponse.toolCalls) {
+        debugLog(`tool_start: ${call.name} args=${JSON.stringify(call.arguments).slice(0, 200)}`);
 
-    // Build tool result messages in provider-specific format and append
-    let resultMessages: any[];
-    switch (provider) {
-      case "anthropic":
-        resultMessages = buildAnthropicToolResultMessages(
-          providerResponse.content,
-          providerResponse.toolCalls,
-          toolResults
-        );
-        break;
-      case "gemini":
-        resultMessages = buildGeminiToolResultMessages(
-          providerResponse.content,
-          providerResponse.toolCalls,
-          toolResults
-        );
-        break;
-      case "openai-codex":
-        rawMessages.push(
-          ...buildOpenAICodexContinuationItems(
+        // Permission check
+        if (runtimeContext.permissionState) {
+          debugLog(`permission_check: ${call.name} (has permissionState)`);
+          const summary = formatPermissionSummary(call.name, call.arguments);
+          const permResult = await runtimeContext.permissionState.checkPermission({
+            toolName: call.name,
+            arguments: call.arguments,
+            summary,
+          });
+          debugLog(`permission_result: ${call.name} allowed=${permResult.allowed} decision=${permResult.decision}`);
+          if (!permResult.allowed) {
+            toolResults.push({
+              callId: call.id,
+              name: call.name,
+              content: `Permission denied: the user declined to allow "${call.name}". Try an alternative approach or ask the user to perform this action manually.`,
+              ok: false,
+            });
+            onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
+            onToolEvent?.({ type: "tool_end", name: call.name, result: "Permission denied by user" });
+            continue;
+          }
+        }
+
+        onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
+        const result = await executeTool(call, {
+          allowedToolNames: runtimeContext.allowedToolNames,
+          agentManager: runtimeContext.agentManager
+        });
+        toolResults.push(result);
+        debugLog(`tool_end: ${call.name} ok=${result.ok} result=${result.content.slice(0, 200)}`);
+        onToolEvent?.({
+          type: "tool_end",
+          name: call.name,
+          result: result.content.slice(0, 300)
+        });
+      }
+      onToolEvent?.({
+        type: "tool_round_complete",
+        name: providerResponse.toolCalls[providerResponse.toolCalls.length - 1]?.name || ""
+      });
+
+      // Build tool result messages in provider-specific format and append
+      let resultMessages: any[];
+      switch (provider) {
+        case "anthropic":
+          resultMessages = buildAnthropicToolResultMessages(
             providerResponse.content,
             providerResponse.toolCalls,
             toolResults
-          )
-        );
-        continue;
-      default:
-        resultMessages = buildOpenAIToolResultMessages(
-          providerResponse.content,
-          providerResponse.toolCalls,
-          toolResults
-        );
-        break;
+          );
+          break;
+        case "gemini":
+          resultMessages = buildGeminiToolResultMessages(
+            providerResponse.content,
+            providerResponse.toolCalls,
+            toolResults
+          );
+          break;
+        case "openai-codex":
+          rawMessages.push(
+            ...buildOpenAICodexContinuationItems(
+              providerResponse.content,
+              providerResponse.toolCalls,
+              toolResults
+            )
+          );
+          continue;
+        default:
+          resultMessages = buildOpenAIToolResultMessages(
+            providerResponse.content,
+            providerResponse.toolCalls,
+            toolResults
+          );
+          break;
+      }
+
+      rawMessages.push(...resultMessages);
     }
 
-    rawMessages.push(...resultMessages);
-  }
-
-  return {
-    ok: false,
-    content: `Reached maximum tool iterations (${MAX_TOOL_ROUNDS}) without a final answer.`
-  };
+    return {
+      ok: false,
+      content: `Reached maximum tool iterations (${MAX_TOOL_ROUNDS}) without a final answer.`
+    };
   } catch (err: any) {
     if (err?.name === "AbortError") {
       return { ok: true, content: fullContent || "" };
     }
-    throw err;
+    logProviderException("streamWithToolLoop error", err);
+    return { ok: false, content: formatProviderRuntimeError(err) };
   }
 }
 
@@ -1510,26 +1541,31 @@ export async function requestCompletion(
   config: PatricConfig,
   messages: ChatMessage[]
 ): Promise<CompletionResult> {
-  const configured = await ensureConfigured(config);
-  if (!configured.ok) {
-    return configured;
-  }
+  try {
+    const configured = await ensureConfigured(config);
+    if (!configured.ok) {
+      return configured;
+    }
 
-  // requestCompletion is used for testConnection — no tools needed
-  const provider = normalizeProvider(config);
-  switch (provider) {
-    case "anthropic":
-      return requestAnthropic(config, messages);
-    case "ollama":
-      return requestOllama(config, messages);
-    case "gemini":
-      return requestGemini(config, messages);
-    case "openai-codex":
-      return requestOpenAICodex(config, messages);
-    case "openrouter":
-    case "openai":
-    default:
-      return requestOpenAICompatible(config, messages);
+    // requestCompletion is used for testConnection — no tools needed
+    const provider = normalizeProvider(config);
+    switch (provider) {
+      case "anthropic":
+        return requestAnthropic(config, messages);
+      case "ollama":
+        return requestOllama(config, messages);
+      case "gemini":
+        return requestGemini(config, messages);
+      case "openai-codex":
+        return requestOpenAICodex(config, messages);
+      case "openrouter":
+      case "openai":
+      default:
+        return requestOpenAICompatible(config, messages);
+    }
+  } catch (error: unknown) {
+    logProviderException("requestCompletion error", error);
+    return { ok: false, content: formatProviderRuntimeError(error) };
   }
 }
 
@@ -1541,21 +1577,29 @@ export async function streamCompletion(
   signal?: AbortSignal,
   runtimeContext?: RuntimeContext
 ): Promise<CompletionResult> {
-  const configured = await ensureConfigured(config);
-  if (!configured.ok) {
-    return configured;
-  }
+  try {
+    const configured = await ensureConfigured(config);
+    if (!configured.ok) {
+      return configured;
+    }
 
-  const resolvedRuntimeContext = await createRuntimeContext(config, onToolEvent, runtimeContext);
-  const effectiveMessages = buildEffectiveMessages(messages, resolvedRuntimeContext);
-  return streamWithToolLoop(
-    config,
-    effectiveMessages,
-    onChunk,
-    onToolEvent,
-    signal,
-    resolvedRuntimeContext
-  );
+    const resolvedRuntimeContext = await createRuntimeContext(config, onToolEvent, runtimeContext);
+    const effectiveMessages = buildEffectiveMessages(messages, resolvedRuntimeContext);
+    return streamWithToolLoop(
+      config,
+      effectiveMessages,
+      onChunk,
+      onToolEvent,
+      signal,
+      resolvedRuntimeContext
+    );
+  } catch (error: unknown) {
+    if ((error as any)?.name === "AbortError") {
+      return { ok: true, content: "" };
+    }
+    logProviderException("streamCompletion error", error);
+    return { ok: false, content: formatProviderRuntimeError(error) };
+  }
 }
 
 export async function testConnection(config: PatricConfig): Promise<CompletionResult> {
