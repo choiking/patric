@@ -22,6 +22,7 @@ import { appendHistory, loadHistory } from "./history";
 import {
   formatConfigSummary,
   getDefaultBaseUrl,
+  loadConfig,
   normalizeModelForProvider,
   normalizeProviderName,
   rememberRecentModel,
@@ -40,6 +41,11 @@ import {
 } from "./provider";
 import { collectContext, getRepoInfo } from "./repo";
 import { AGENT_TOOL_NAMES, getAllToolNames } from "./tools";
+import {
+  PermissionState,
+  type PermissionDecision,
+  type PermissionRequest,
+} from "./permissions";
 import { execCommand, listDir, readFileSafe, writeFileSafe } from "./utils";
 import chalk from "chalk";
 import { Marked } from "marked";
@@ -81,6 +87,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/agent", description: "Run a saved sub-agent" },
   { name: "/patch", description: "Generate a patch file" },
   { name: "/apply", description: "Apply a patch file" },
+  { name: "/permissions", description: "Toggle permission prompts on/off" },
   { name: "/settings", description: "Open settings" },
   { name: "/model", description: "Show or set model" },
   { name: "/exit", description: "Exit Patric" }
@@ -530,6 +537,9 @@ export async function startTui(
     throw new Error("Patric TUI requires an interactive terminal.");
   }
 
+  // Start the relay server for the browser extension now that we're in an interactive session
+  import("./relay-server").then((r) => r.startRelayServer()).catch(() => {});
+
   let cwd = process.cwd();
   let activeModel = config.model;
   let mode: ViewMode = options?.openSettings ? "settings" : "chat";
@@ -561,6 +571,45 @@ export async function startTui(
   let spinnerTimer: ReturnType<typeof setInterval> | null = null;
   const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   let abortController: AbortController | null = null;
+
+  // Permission prompt state
+  let permissionResolver: ((decision: PermissionDecision) => void) | null = null;
+  let permissionRequest: PermissionRequest | null = null;
+
+  const showPermissionPrompt = (request: PermissionRequest): Promise<PermissionDecision> => {
+    return new Promise<PermissionDecision>((resolve) => {
+      permissionRequest = request;
+      permissionResolver = resolve;
+      render();
+    });
+  };
+
+  const resolvePermission = (decision: PermissionDecision) => {
+    if (permissionResolver) {
+      const toolName = permissionRequest?.toolName;
+      const resolver = permissionResolver;
+      permissionResolver = null;
+      permissionRequest = null;
+      render();
+      resolver(decision);
+      // Persist "always allow" to config
+      if (decision === "allow-always" && toolName) {
+        try {
+          const cfg = loadConfig();
+          if (!cfg.allowedTools.includes(toolName)) {
+            cfg.allowedTools.push(toolName);
+            saveConfig(cfg);
+          }
+        } catch {}
+      }
+    }
+  };
+
+  let permissionsEnabled = true;
+  const permissionState = new PermissionState({
+    configAllowed: config.allowedTools || [],
+    promptFn: showPermissionPrompt,
+  });
 
   // Agent run tracking for tree display
   interface AgentRunInfo {
@@ -1182,12 +1231,40 @@ export async function startTui(
     ];
   };
 
+  const renderPermissionOverlay = (width: number): string[] => {
+    if (!permissionRequest) return [];
+    const innerWidth = Math.min(width - 4, 64);
+    const pad = (text: string, w: number) => {
+      const vis = visibleWidth(text);
+      return vis < w ? text + " ".repeat(w - vis) : text;
+    };
+    const border = theme.border;
+    const top = border(`\u250c\u2500 ${theme.warning("Allow tool?")} ` + border("\u2500".repeat(Math.max(0, innerWidth - 15))) + border("\u2510"));
+    const bot = border("\u2514" + "\u2500".repeat(innerWidth + 2) + "\u2518");
+    const line = (text: string) => border("\u2502") + " " + pad(text, innerWidth) + " " + border("\u2502");
+    const summaryText = permissionRequest.summary.length > innerWidth
+      ? permissionRequest.summary.slice(0, innerWidth - 3) + "..."
+      : permissionRequest.summary;
+    return [
+      top,
+      line(theme.accentStrong(summaryText)),
+      line(""),
+      line(
+        `${theme.key("[Y]")} Allow  ${theme.key("[S]")} Session  ${theme.key("[A]")} Always  ${theme.key("[N]")} Deny`
+      ),
+      bot,
+    ];
+  };
+
   const renderChatFrame = (dimmed = false): string[] => {
     const rows = process.stdout.rows || 30;
     const columns = process.stdout.columns || 100;
     const width = Math.max(48, columns - 2);
     const header = renderBackdrop("chat");
-    const inputLines = renderInput();
+
+    const permOverlay = permissionRequest ? renderPermissionOverlay(width) : [];
+    const inputLines = permOverlay.length > 0 ? permOverlay : renderInput();
+
     const availableHeight = Math.max(0, rows - header.length - inputLines.length);
     const messageLines = renderMessages(availableHeight, width);
     const out = [...header, ...messageLines];
@@ -1479,7 +1556,9 @@ export async function startTui(
     // Chat mode: simple transcript layout (intro + messages + prompt)
     // Build the prompt lines (always visible at bottom)
     let promptLines: string[];
-    if (isBusy) {
+    if (permissionRequest) {
+      promptLines = renderPermissionOverlay(width);
+    } else if (isBusy) {
       const rule = theme.border("─".repeat(width));
       const inputLine = `${theme.muted(">")}`;
       const footerRight = theme.muted("esc to interrupt");
@@ -1558,7 +1637,7 @@ export async function startTui(
     }
 
     // Show thinking indicator in transcript when busy
-    if (isBusy) {
+    if (isBusy && !permissionRequest) {
       const frame = spinnerFrames[spinnerFrame % spinnerFrames.length];
       transcript.push("");
       const thinkingLeft = `  ${theme.muted(`${frame} Thinking...`)}`;
@@ -1775,7 +1854,12 @@ export async function startTui(
       {
         allowedToolNames,
         agentRegistry: registry,
-        agent: { kind: "sub-agent", name: spec.name }
+        agent: { kind: "sub-agent", name: spec.name },
+        permissionState: new PermissionState({
+          configAllowed: permissionState.getConfigAllowed(),
+          promptFn: null,
+          isSubAgent: true,
+        }),
       }
     );
     abortController = null;
@@ -1817,7 +1901,7 @@ export async function startTui(
         "status",
         [
           "Patric commands",
-          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /agents, /agent run <name> <prompt>, /patch, /apply, /settings, /model, /exit"
+          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /agents, /agent run <name> <prompt>, /patch, /apply, /permissions, /settings, /model, /exit"
         ].join("\n")
       );
       return;
@@ -1930,6 +2014,11 @@ export async function startTui(
       addMessage("status", `Model set to ${activeModel}`);
       return;
     }
+    if (command === "/permissions") {
+      permissionsEnabled = !permissionsEnabled;
+      addMessage("status", `Permission prompts ${permissionsEnabled ? "enabled" : "disabled"}`);
+      return;
+    }
     if (command === "/exit") {
       shouldExit = true;
       return;
@@ -1969,7 +2058,9 @@ export async function startTui(
         liveAssistantMessage = null;
       }
       handleToolEvent(event);
-    }, abortController.signal);
+    }, abortController.signal, permissionsEnabled ? {
+      permissionState,
+    } : undefined);
     abortController = null;
     stopSpinner();
     isBusy = false;
@@ -2280,6 +2371,19 @@ export async function startTui(
       }
       return; // ignore other mouse events
     }
+    // Permission prompt input handling
+    if (permissionResolver) {
+      const events = splitInputSequence(raw);
+      for (const value of events) {
+        const lower = value.toLowerCase();
+        if (lower === "y") resolvePermission("allow-once");
+        else if (lower === "s") resolvePermission("allow-session");
+        else if (lower === "a") resolvePermission("allow-always");
+        else if (lower === "n" || value === "\u001b") resolvePermission("deny");
+      }
+      return;
+    }
+
     const events = splitInputSequence(raw);
     for (const value of events) {
       if (mode === "chat") {

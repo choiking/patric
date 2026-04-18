@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import * as relay from "./relay-server";
 
-// Start the relay server immediately on import so the extension has time to connect
-relay.startRelayServer().catch(() => {});
+// Relay server is started by the TUI on demand — not on import.
+// Starting on import keeps short-lived commands (--help, repo) alive forever.
 
 // ---------------------------------------------------------------------------
 // Types & constants

@@ -118,6 +118,26 @@ export function navigateTab(tabId: number, url: string): Promise<void> {
 // Server
 // ---------------------------------------------------------------------------
 
+async function killExistingRelay(): Promise<void> {
+  try {
+    const proc = Bun.spawn(["lsof", "-ti", `:${RELAY_PORT}`], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const text = await new Response(proc.stdout).text();
+    const pids = text.trim().split(/\s+/).filter(Boolean);
+    const myPid = String(process.pid);
+    for (const pid of pids) {
+      if (pid !== myPid) {
+        try { process.kill(Number(pid), "SIGTERM"); } catch {}
+      }
+    }
+    if (pids.length > 0) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  } catch {}
+}
+
 export async function startRelayServer(): Promise<void> {
   if (server) return;
 
@@ -127,7 +147,7 @@ export async function startRelayServer(): Promise<void> {
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
-  server = Bun.serve({
+  const serve = () => Bun.serve({
     port: RELAY_PORT,
     idleTimeout: 30, // seconds — needed for long-poll (default is 10)
     async fetch(req) {
@@ -197,6 +217,14 @@ export async function startRelayServer(): Promise<void> {
       return new Response("Not found", { status: 404, headers: corsHeaders });
     },
   });
+
+  try {
+    server = serve();
+  } catch {
+    // Port likely in use by a stale process — kill it and retry
+    await killExistingRelay();
+    server = serve();
+  }
 }
 
 export function stopRelayServer(): void {

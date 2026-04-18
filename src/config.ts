@@ -11,6 +11,7 @@ export interface PatricConfig {
   oauthToken: string;
   systemPrompt: string;
   recentModels: Record<string, string[]>;
+  allowedTools: string[];
 }
 
 const SUPPORTED_PROVIDERS = [
@@ -42,7 +43,8 @@ const DEFAULT_CONFIG: PatricConfig = {
     "For browser tasks: navigate to a page, take a snapshot to see numbered element refs, " +
     "then use click/type/select with ref numbers to interact with the page. " +
     "You have read_memory and save_memory tools for persistent memory (USER.md, SOUL.md, PATRIC.md).",
-  recentModels: {}
+  recentModels: {},
+  allowedTools: []
 };
 
 function isKnownDefaultBaseUrl(baseUrl: string): boolean {
@@ -130,7 +132,8 @@ const ALLOWED_CONFIG_KEYS = new Set<keyof PatricConfig>([
   "apiKey",
   "oauthToken",
   "systemPrompt",
-  "recentModels"
+  "recentModels",
+  "allowedTools"
 ]);
 
 export function getConfigPath(): string {
@@ -166,7 +169,8 @@ export function loadConfig(): PatricConfig {
       process.env.PATRIC_SYSTEM_PROMPT ||
       fileConfig.systemPrompt ||
       DEFAULT_CONFIG.systemPrompt,
-    recentModels: fileConfig.recentModels || DEFAULT_CONFIG.recentModels
+    recentModels: fileConfig.recentModels || DEFAULT_CONFIG.recentModels,
+    allowedTools: fileConfig.allowedTools || DEFAULT_CONFIG.allowedTools
   };
 }
 

@@ -29,6 +29,7 @@ import {
   type ToolEvent,
   type ToolResult
 } from "./tools";
+import { formatPermissionSummary, PermissionState } from "./permissions";
 
 export type { ToolEvent } from "./tools";
 
@@ -50,6 +51,7 @@ export interface RuntimeContext {
     kind: "top-level" | "sub-agent";
     name?: string;
   };
+  permissionState?: PermissionState;
 }
 
 type ProviderName = "openai" | "openai-codex" | "openrouter" | "anthropic" | "ollama" | "gemini";
@@ -727,7 +729,14 @@ async function createRuntimeContext(
         {
           allowedToolNames: childAllowedToolNames,
           agentRegistry: registry,
-          agent: { kind: "sub-agent", name: spec.name }
+          agent: { kind: "sub-agent", name: spec.name },
+          permissionState: runtimeContext?.permissionState
+            ? new PermissionState({
+                configAllowed: runtimeContext.permissionState.getConfigAllowed(),
+                promptFn: null,
+                isSubAgent: true,
+              })
+            : undefined,
         }
       );
     }
@@ -1306,10 +1315,8 @@ function convertToGeminiFormat(messages: ChatMessage[]): any[] {
 // ---------------------------------------------------------------------------
 
 function debugLog(msg: string): void {
-  if (process.env.PATRIC_DEBUG) {
-    const ts = new Date().toISOString().slice(11, 23);
-    fs.appendFileSync("/tmp/patric-debug.log", `[${ts}] ${msg}\n`);
-  }
+  const ts = new Date().toISOString().slice(11, 23);
+  fs.appendFileSync("/tmp/patric-debug.log", `[${ts}] ${msg}\n`);
 }
 
 async function streamWithToolLoop(
@@ -1403,6 +1410,30 @@ async function streamWithToolLoop(
     const toolResults: ToolResult[] = [];
     for (const call of providerResponse.toolCalls) {
       debugLog(`tool_start: ${call.name} args=${JSON.stringify(call.arguments).slice(0, 200)}`);
+
+      // Permission check
+      if (runtimeContext.permissionState) {
+        debugLog(`permission_check: ${call.name} (has permissionState)`);
+        const summary = formatPermissionSummary(call.name, call.arguments);
+        const permResult = await runtimeContext.permissionState.checkPermission({
+          toolName: call.name,
+          arguments: call.arguments,
+          summary,
+        });
+        debugLog(`permission_result: ${call.name} allowed=${permResult.allowed} decision=${permResult.decision}`);
+        if (!permResult.allowed) {
+          toolResults.push({
+            callId: call.id,
+            name: call.name,
+            content: `Permission denied: the user declined to allow "${call.name}". Try an alternative approach or ask the user to perform this action manually.`,
+            ok: false,
+          });
+          onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
+          onToolEvent?.({ type: "tool_end", name: call.name, result: "Permission denied by user" });
+          continue;
+        }
+      }
+
       onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
       const result = await executeTool(call, {
         allowedToolNames: runtimeContext.allowedToolNames,
