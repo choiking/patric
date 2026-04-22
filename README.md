@@ -1,6 +1,6 @@
 # Patric
 
-`patric` is a standalone coding assistant CLI inspired by tools like Claude Code.
+`patric` is a Coding Cli works like a OpenClaw
 
 It is not a wrapper around Claude. It has its own entrypoint, command parser,
 interactive mode, local file helpers, shell helpers, and a provider layer for
