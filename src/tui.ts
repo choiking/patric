@@ -569,7 +569,7 @@ export async function startTui(
   let hasPrintedConversation = false;
   let spinnerFrame = 0;
   let spinnerTimer: ReturnType<typeof setInterval> | null = null;
-  const spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const spinnerFrames = ["◐", "◓", "◑", "◒"];
   let abortController: AbortController | null = null;
 
   // Permission prompt state
