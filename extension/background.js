@@ -16,6 +16,32 @@ let activeTabId = null;
 // Long-polling loop
 // ---------------------------------------------------------------------------
 
+// Guard against concurrent poll loops (startup + popup connect + keepalive
+// alarm can all try to start polling; duplicate loops caused the same
+// command to be executed multiple times, e.g. opening many tabs).
+let polling = false;
+
+// Ids of recently executed commands, so a redelivered command is never
+// executed twice (defense-in-depth).
+const executedIds = [];
+const EXECUTED_IDS_MAX = 20;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollLoop() {
+  if (polling) return;
+  polling = true;
+  try {
+    while (!stopped) {
+      await pollOnce();
+    }
+  } finally {
+    polling = false;
+  }
+}
+
 async function pollOnce() {
   const stored = await chrome.storage.local.get(["relayUrl"]);
   const storedUrl = stored.relayUrl || "";
@@ -34,6 +60,8 @@ async function pollOnce() {
 
     if (!connected) {
       connected = true;
+      // Server may have restarted (command ids reset), so forget old ids.
+      executedIds.length = 0;
       updateBadge("ON", "#4CAF50");
       broadcastStatus();
       console.log("[Patric] Connected to relay server");
@@ -42,6 +70,13 @@ async function pollOnce() {
     const msg = await resp.json();
 
     if (msg.type !== "noop") {
+      if (executedIds.includes(msg.id)) {
+        console.log("[Patric] Skipping already-executed command:", msg.type, msg.id);
+        return;
+      }
+      executedIds.push(msg.id);
+      if (executedIds.length > EXECUTED_IDS_MAX) executedIds.shift();
+
       // Process the command
       console.log("[Patric] Received command:", msg.type, msg.id);
       let result, error;
@@ -61,10 +96,6 @@ async function pollOnce() {
         signal: AbortSignal.timeout(5000),
       });
     }
-
-    // Immediately poll again
-    pollOnce();
-
   } catch (err) {
     // Connection failed — server not running or network error
     if (connected) {
@@ -74,7 +105,7 @@ async function pollOnce() {
       console.log("[Patric] Disconnected:", err.message);
     }
     // Retry after 2 seconds
-    setTimeout(() => pollOnce(), 2000);
+    await sleep(2000);
   }
 }
 
@@ -269,7 +300,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === "connect") {
     stopped = false;
-    pollOnce();
+    pollLoop();
     sendResponse({ ok: true });
     return true;
   }
@@ -294,9 +325,9 @@ chrome.alarms.create("patric-keepalive", { periodInMinutes: 0.5 }); // 30s
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "patric-keepalive") {
-    if (!stopped) {
+    if (!stopped && !polling) {
       console.log("[Patric] Alarm: restarting poll");
-      pollOnce();
+      pollLoop();
     }
   }
 });
@@ -312,4 +343,4 @@ chrome.storage.local.get(["relayUrl"], (stored) => {
     chrome.storage.local.remove("relayUrl");
   }
 });
-pollOnce();
+pollLoop();

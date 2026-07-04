@@ -28,7 +28,8 @@ let extensionConnected = false;
 let lastPollTime = 0;
 
 // Command queue: relay pushes commands, extension polls for them
-let pendingCommand: { req: RelayRequest; resolve: (result: any) => void; reject: (err: Error) => void } | null = null;
+// `delivered` prevents the same command from being handed to multiple polls.
+let pendingCommand: { req: RelayRequest; resolve: (result: any) => void; reject: (err: Error) => void; delivered: boolean } | null = null;
 
 // When extension polls and there's no command, we hold the response open (long-poll)
 let waitingPoll: { resolve: (resp: Response) => void } | null = null;
@@ -54,12 +55,13 @@ function sendRequest(msg: Omit<RelayRequest, "id">): Promise<any> {
       pendingCommand.reject(new Error("Superseded by new command"));
     }
 
-    pendingCommand = { req, resolve, reject };
+    pendingCommand = { req, resolve, reject, delivered: false };
 
     // If extension is already long-polling, respond immediately
     if (waitingPoll) {
       const poll = waitingPoll;
       waitingPoll = null;
+      pendingCommand.delivered = true;
       poll.resolve(new Response(JSON.stringify(req), {
         headers: {
           "Content-Type": "application/json",
@@ -169,10 +171,12 @@ export async function startRelayServer(): Promise<void> {
         extensionConnected = true;
         lastPollTime = Date.now();
 
-        // If there's a pending command, return it immediately
-        if (pendingCommand) {
-          const cmd = pendingCommand.req;
-          return jsonResp(cmd);
+        // If there's an undelivered pending command, return it immediately.
+        // Already-delivered commands must not be handed out again (it would
+        // cause the extension to execute the same action multiple times).
+        if (pendingCommand && !pendingCommand.delivered) {
+          pendingCommand.delivered = true;
+          return jsonResp(pendingCommand.req);
         }
 
         // Otherwise, hold the connection open for up to 25 seconds (long-poll)
