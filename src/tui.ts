@@ -19,6 +19,7 @@ import {
 } from "./auth";
 import type { PatricConfig } from "./config";
 import { appendHistory, loadHistory } from "./history";
+import { getModelOptions, getModelPickerWindow } from "./models.js";
 import {
   formatConfigSummary,
   getDefaultBaseUrl,
@@ -90,12 +91,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/permissions", description: "Toggle permission prompts on/off" },
   { name: "/settings", description: "Open settings" },
   { name: "/model", description: "Show or set model" },
+  { name: "/models", description: "Choose from live provider models" },
   { name: "/exit", description: "Exit Patric" }
 ];
 
 const PROVIDERS = ["openai", "openai-codex", "openrouter", "anthropic", "ollama", "gemini"] as const;
 
-const RECOMMENDED_MODELS: Record<string, string[]> = {
+const FALLBACK_MODELS: Record<string, string[]> = {
   openai: ["gpt-5.4", "gpt-5.1", "gpt-5-mini", "gpt-5-nano"],
   "openai-codex": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex-mini"],
   openrouter: ["openai/gpt-4.1-mini", "anthropic/claude-sonnet-4", "google/gemini-2.5-flash"],
@@ -522,13 +524,6 @@ function providerBaseUrlLabel(provider: string): string {
   return normalizeProviderName(provider) === "ollama" ? "Ollama host" : "Base URL";
 }
 
-function getModelOptions(config: PatricConfig, discovered: string[] = []): string[] {
-  const provider = normalizeProviderName(config.provider);
-  const recent = config.recentModels[provider] || [];
-  const recommended = RECOMMENDED_MODELS[provider] || [];
-  return [...new Set([...recent, ...discovered, ...recommended]), "Custom model..."];
-}
-
 export async function startTui(
   config: PatricConfig,
   options?: { openSettings?: boolean; closeAfterSettings?: boolean; instructionSources?: import("./instructions").InstructionSources }
@@ -562,6 +557,7 @@ export async function startTui(
   let closeAfterSettings = options?.closeAfterSettings ?? false;
   let modelPickerLoading = false;
   let modelPickerRequestId = 0;
+  let modelPickerController: AbortController | null = null;
   let isInAltScreen = false;
   let renderedPromptLines = 0;
   let transcriptEndsWithNewline = true;
@@ -866,48 +862,47 @@ export async function startTui(
   const getDraftModelOptions = () =>
     getModelOptions(
       draftConfig,
-      modelOptionsCache.get(getModelCacheKey(draftConfig.provider, draftConfig.baseUrl)) || []
+      modelOptionsCache.get(getModelCacheKey(draftConfig.provider, draftConfig.baseUrl)),
+      FALLBACK_MODELS[normalizeProviderName(draftConfig.provider)] || []
     );
 
-  const supportsLiveModelDiscovery = (provider: string) => {
-    const normalized = normalizeProviderName(provider);
-    return normalized === "openai" || normalized === "openrouter" || normalized === "ollama";
+  const cancelModelRefresh = () => {
+    modelPickerController?.abort();
+    modelPickerController = null;
+    modelPickerRequestId++;
+    modelPickerLoading = false;
   };
 
-  const refreshModelOptions = async (force = false) => {
-    if (!supportsLiveModelDiscovery(draftConfig.provider)) {
-      return;
-    }
-
-    const cacheKey = getModelCacheKey(draftConfig.provider, draftConfig.baseUrl);
-    if (!force && modelOptionsCache.has(cacheKey)) {
-      return;
-    }
-
-    const requestId = ++modelPickerRequestId;
+  const refreshModelOptions = async () => {
+    cancelModelRefresh();
+    const requestId = modelPickerRequestId;
+    const runtimeConfig = getDraftRuntimeConfig();
+    const cacheKey = getModelCacheKey(runtimeConfig.provider, runtimeConfig.baseUrl);
+    modelPickerController = new AbortController();
     modelPickerLoading = true;
-    overlayStatus = `Loading ${draftConfig.provider} models...`;
+    overlayStatus = `Loading ${runtimeConfig.provider} models...`;
     render();
 
     try {
-      const models = await listAvailableModels(getDraftRuntimeConfig());
-      if (requestId !== modelPickerRequestId) {
-        return;
-      }
+      const models = await listAvailableModels(runtimeConfig, modelPickerController.signal);
+      if (requestId !== modelPickerRequestId) return;
+      const selected = getDraftModelOptions()[pickerIndex];
       modelOptionsCache.set(cacheKey, models);
       const options = getDraftModelOptions();
-      pickerIndex = Math.max(0, options.indexOf(draftConfig.model));
+      pickerIndex = Math.max(0, options.indexOf(selected || draftConfig.model));
       overlayStatus = models.length > 0
-        ? `Loaded ${models.length} ${draftConfig.provider} models`
-        : `No ${draftConfig.provider} models returned; using fallback list`;
-    } catch {
-      if (requestId !== modelPickerRequestId) {
-        return;
-      }
-      overlayStatus = `Could not load live ${draftConfig.provider} models; showing fallback list`;
+        ? `Loaded ${models.length} live models`
+        : "Provider returned no models; enter a custom model";
+    } catch (error) {
+      if (requestId !== modelPickerRequestId) return;
+      const source = modelOptionsCache.has(cacheKey) ? "last loaded list" : "fallback list";
+      const reason = error instanceof Error && error.name === "TimeoutError"
+        ? "Request timed out" : error instanceof Error ? error.message : "Request failed";
+      overlayStatus = `Using ${source} · ${reason}`;
     } finally {
       if (requestId === modelPickerRequestId) {
         modelPickerLoading = false;
+        modelPickerController = null;
         render();
       }
     }
@@ -1458,24 +1453,26 @@ export async function startTui(
       );
     }
     if (mode === "model-picker") {
-      const options = getDraftModelOptions().map((item, index) =>
+      const options = getDraftModelOptions();
+      const { start, end } = getModelPickerWindow(options.length, pickerIndex, process.stdout.rows || 30);
+      const items = options.slice(start, end).map((item, offset) =>
         renderListRow(
-          theme.panel(truncatePlain(item, 28)),
-          theme.muted(index === pickerIndex ? "selected" : ""),
-          34,
-          index === pickerIndex
+          theme.panel(truncatePlain(item, 34)),
+          "",
+          36,
+          start + offset === pickerIndex
         )
       );
-      const description = supportsLiveModelDiscovery(draftConfig.provider)
-        ? "Recent, recommended, and live models for the active provider."
-        : "Recent and recommended models for the active provider.";
       return renderOverlay(
         "Choose model",
-        [theme.muted(description), "", ...options],
-        overlayStatus ||
-          (modelPickerLoading
-            ? "Loading live model list... · Esc back"
-            : "Up/Down · Enter select · Esc back"),
+        [
+          theme.muted(`${start + 1}–${end} of ${options.length} · ${draftConfig.provider}`),
+          "",
+          ...items,
+          "",
+          theme.muted(truncatePlain(overlayStatus || (modelPickerLoading ? "Loading live models..." : ""), 42))
+        ],
+        "↑/↓ move · Enter select · R refresh · Esc back",
         true
       );
     }
@@ -1752,6 +1749,7 @@ export async function startTui(
   };
 
   const closeSettings = () => {
+    cancelModelRefresh();
     const status = overlayStatus;
     mode = "chat";
     editingField = null;
@@ -1912,7 +1910,7 @@ export async function startTui(
         "status",
         [
           "Patric commands",
-          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /agents, /agent run <name> <prompt>, /patch, /apply, /permissions, /settings, /model, /exit"
+          "/help, /pwd, /cd, /ls, /read, /write, /exec, /repo, /context, /agents, /agent run <name> <prompt>, /patch, /apply, /permissions, /settings, /model, /models, /exit"
         ].join("\n")
       );
       return;
@@ -2018,6 +2016,13 @@ export async function startTui(
       addMessage("status", activeModel || "(not set)");
       return;
     }
+    if (command === "/models") {
+      openSettingsScreen();
+      pickerIndex = Math.max(0, getDraftModelOptions().indexOf(draftConfig.model));
+      mode = "model-picker";
+      void refreshModelOptions();
+      return;
+    }
     if (command.startsWith("/model ")) {
       activeModel = normalizeModelForProvider(config.provider, command.slice(7).trim());
       draftConfig.model = activeModel;
@@ -2117,11 +2122,16 @@ export async function startTui(
     }
 
     if (inputKey === "\u001b") {
+      cancelModelRefresh();
       if (mode === "settings") {
         closeSettings();
       } else {
         mode = "settings";
       }
+      return;
+    }
+    if (mode === "model-picker" && inputKey.toLowerCase() === "r") {
+      void refreshModelOptions();
       return;
     }
     if (inputKey === "?") {
@@ -2169,6 +2179,7 @@ export async function startTui(
     if (mode === "model-picker") {
       const options = getDraftModelOptions();
       const selected = options[pickerIndex];
+      cancelModelRefresh();
       if (selected === "Custom model...") {
         editingField = "customModel";
         editingBuffer = draftConfig.model;
@@ -2428,6 +2439,7 @@ export async function startTui(
       return;
     }
     isActive = false;
+    cancelModelRefresh();
     stopSpinner();
     if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
     closeBrowser().catch(() => {});

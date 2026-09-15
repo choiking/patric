@@ -25,6 +25,7 @@ connecting to direct OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and G
 patric
 patric settings
 patric status
+patric models
 patric use ollama qwen3
 patric use anthropic claude-sonnet-4-20250514
 patric chat "summarize this repository"
@@ -51,6 +52,23 @@ patric settings
 
 This opens a separate full-screen terminal settings view for provider, model,
 API key, and base URL.
+
+The model picker fetches the active provider's live catalog each time it opens.
+This supports OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and Gemini.
+Use `/models` in chat, or choose **Model** in settings; press **R** to refresh
+without leaving the picker. Arrow keys scroll through the full list. Use
+`patric models` to fetch the catalog from the command line.
+
+Successful responses replace the built-in fallback suggestions. Your selected
+model stays available, and **Custom model...** lets you enter an ID manually.
+If discovery fails, the picker keeps its last successful list for that session,
+or shows fallback suggestions if none were loaded. Catalog requests time out
+after 15 seconds. Discovery does not change your selected model.
+
+Codex discovery uses the ChatGPT backend catalog and your Patric browser login;
+that endpoint is separate from the public OpenAI Models API and may change.
+`PATRIC_CODEX_CLIENT_VERSION` overrides its catalog compatibility version
+(default `0.153.4`) if the backend requires a newer client version.
 
 Environment variables:
 
@@ -147,6 +165,7 @@ Notes:
 - `/apply <patch-file>`
 - `/settings`
 - `/model [name]`
+- `/models`
 - `/exit`
 
 ## Project Layout

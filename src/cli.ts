@@ -22,7 +22,7 @@ import { loginWithAnthropicApiKey, loginWithGoogleOAuth, loginWithOpenAIOAuth } 
 import { applyPatch, generatePatch } from "./patch";
 import { startTui } from "./tui";
 import { collectContext, getRepoInfo, listRepoFiles } from "./repo";
-import { streamCompletion, type ToolEvent } from "./provider";
+import { listAvailableModels, streamCompletion, type ToolEvent } from "./provider";
 import { AGENT_TOOL_NAMES, getAllToolNames } from "./tools";
 import { listDir, print, printError, readFileSafe, writeFileSafe, execCommand } from "./utils";
 
@@ -46,6 +46,7 @@ function usage(): string {
     "  patric use <provider> [model]  Switch provider and optionally model",
     "  patric provider [name]         Show or set provider",
     "  patric model [name]            Show or set model",
+    "  patric models                  Fetch available models for the active provider",
     "  patric read <file>             Read a file",
     "  patric write <file> <content>  Write a file",
     "  patric exec <command>          Run a shell command",
@@ -242,6 +243,12 @@ async function main(): Promise<void> {
       printError(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     }
+    return;
+  }
+
+  if (command === "models") {
+    const models = await listAvailableModels(config);
+    print(models.length ? models.join("\n") : "Provider returned no models.");
     return;
   }
 

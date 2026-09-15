@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { fetchModelCatalog } from "./models.js";
 import {
   getDefaultBaseUrl,
   getModelCompatibilityError,
@@ -78,67 +79,6 @@ function resolveModel(config: PatricConfig): string {
   return normalizeModelForProvider(config.provider, config.model);
 }
 
-function isLikelyOpenAIChatModel(id: string): boolean {
-  const normalized = id.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (
-    /(embedding|whisper|tts|transcri|moderation|image|realtime|audio|search|computer-use)/.test(
-      normalized
-    )
-  ) {
-    return false;
-  }
-  return /^(gpt|o[1-9]|codex|chatgpt)/.test(normalized);
-}
-
-function rankOpenAIModel(id: string): number {
-  const normalized = id.toLowerCase();
-  const priorities = [
-    "gpt-5.4",
-    "gpt-5.2",
-    "gpt-5.1",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-5",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "gpt-4o",
-    "gpt-4o-mini",
-    "o4-mini",
-    "o3",
-    "o3-mini",
-    "codex-mini-latest"
-  ];
-  const exact = priorities.indexOf(normalized);
-  if (exact >= 0) {
-    return exact;
-  }
-  const prefix = priorities.findIndex((candidate) => normalized.startsWith(`${candidate}-`));
-  if (prefix >= 0) {
-    return prefix + priorities.length;
-  }
-  return priorities.length * 2;
-}
-
-function sortOpenAIModels(ids: string[]): string[] {
-  return [...ids].sort((left, right) => {
-    const leftRank = rankOpenAIModel(left);
-    const rightRank = rankOpenAIModel(right);
-    if (leftRank !== rightRank) {
-      return leftRank - rightRank;
-    }
-    const leftSnapshot = /\d{4}-\d{2}-\d{2}/.test(left);
-    const rightSnapshot = /\d{4}-\d{2}-\d{2}/.test(right);
-    if (leftSnapshot !== rightSnapshot) {
-      return leftSnapshot ? 1 : -1;
-    }
-    return left.localeCompare(right, undefined, { numeric: true });
-  });
-}
-
 async function getResolvedAuth(config: PatricConfig): Promise<ProviderAuth | undefined> {
   const auth = getEffectiveAuth(config.provider, {
     apiKey: config.apiKey,
@@ -187,62 +127,21 @@ async function getResolvedAuth(config: PatricConfig): Promise<ProviderAuth | und
   return auth;
 }
 
-export async function listAvailableModels(config: PatricConfig): Promise<string[]> {
+export async function listAvailableModels(config: PatricConfig, signal?: AbortSignal): Promise<string[]> {
   const provider = normalizeProvider(config);
-
-  if (provider === "openai-codex") {
-    throw new Error("Live model discovery is not available for openai-codex.");
+  const auth = provider === "ollama" ? undefined : await getResolvedAuth(config);
+  if (provider !== "ollama" && !auth) {
+    throw new Error("Provider is not configured with credentials.");
   }
-
-  if (provider === "openai" || provider === "openrouter") {
-    const auth = await getResolvedAuth(config);
-    if (!auth) {
-      throw new Error("Provider is not configured with credentials.");
-    }
-    if (provider === "openai" && auth.type !== "api") {
-      throw new Error("Direct OpenAI model discovery requires an API key. Use openai-codex for browser OAuth.");
-    }
-
-    const response = await fetch(`${resolveBaseUrl(config)}/models`, {
-      method: "GET",
-      headers: getOpenAICompatibleHeaders(auth)
-    });
-    if (!response.ok) {
-      throw new Error(`Model list request failed (${response.status}).`);
-    }
-
-    const data = await response.json();
-    const models = Array.isArray(data?.data)
-      ? data.data
-          .map((item: any) => (typeof item?.id === "string" ? item.id.trim() : ""))
-          .filter(Boolean)
-      : [];
-
-    if (provider === "openai") {
-      return sortOpenAIModels(models.filter(isLikelyOpenAIChatModel));
-    }
-
-    return models.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+  if (provider === "openai" && auth?.type !== "api") {
+    throw new Error("Direct OpenAI model discovery requires an API key. Use openai-codex for browser OAuth.");
   }
-
-  if (provider === "ollama") {
-    const response = await fetch(`${resolveBaseUrl(config)}/api/tags`, {
-      method: "GET",
-      headers: { "content-type": "application/json" }
-    });
-    if (!response.ok) {
-      throw new Error(`Model list request failed (${response.status}).`);
-    }
-    const data = await response.json();
-    const models = Array.isArray(data?.models)
-      ? data.models
-          .map((item: any) => (typeof item?.name === "string" ? item.name.trim() : ""))
-          .filter(Boolean)
-      : [];
-    return models.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
-  }
-
-  throw new Error(`Live model discovery is not available for ${provider}.`);
+  const headers = provider === "ollama" ? {}
+    : provider === "openai-codex" ? getOpenAICodexHeaders(auth!)
+    : provider === "anthropic" ? getAnthropicHeaders(auth!)
+    : provider === "gemini" ? getGeminiHeaders(auth!)
+    : getOpenAICompatibleHeaders(auth!);
+  return fetchModelCatalog({ provider, baseUrl: resolveBaseUrl(config), headers, signal });
 }
 
 function getOpenAICompatibleHeaders(auth: ProviderAuth): Record<string, string> {
