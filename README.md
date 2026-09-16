@@ -65,6 +65,21 @@ file writes, and stopping at an approval prompt. These tests need permission to
 bind a localhost port. The renderer uses a sandboxed preload bridge and context
 isolation following [Electron's security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
 
+### Shared engine
+
+CLI chat, terminal chat, and desktop chat all enter through `src/chat.ts`.
+`loadChatConfig` loads configuration and project instructions;
+`streamChatTurn` builds the system message and calls the existing provider/tool
+engine. The desktop backend only adapts window requests and events to that engine.
+A mock-provider integration test compares the complete outgoing CLI and desktop
+requests for the same prompt, settings, and project instructions.
+
+Interface differences are explicit: terminal chat supports remembered approvals
+and slash commands, desktop chat currently prompts per action and stores its own
+conversations, and one-shot CLI chat retains its existing non-interactive tool
+policy. Authentication and settings screens differ, but provider discovery,
+credential resolution, model requests, and tool implementations are shared.
+
 ## Usage
 
 ```bash

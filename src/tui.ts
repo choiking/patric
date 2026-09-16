@@ -1,4 +1,5 @@
 import process from "node:process";
+import { streamChatTurn } from "./chat.js";
 import path from "node:path";
 import fs from "node:fs";
 import {
@@ -2064,7 +2065,7 @@ export async function startTui(
     const runtimeConfig = getActiveChatConfig();
     llmMessages.push({ role: "user", content: command });
     abortController = new AbortController();
-    const result = await streamCompletion(runtimeConfig, llmMessages, (chunk) => {
+    const result = await streamChatTurn(runtimeConfig, llmMessages, (chunk) => {
       if (!streamedAssistantOutput) stopSpinner();
       ensureAssistantMessage().content += chunk;
       scheduleRender();

@@ -1,8 +1,8 @@
 import readline from "node:readline";
 import { loadConfig, configureProvider, setConfigValue } from "./config.js";
-import { streamCompletion, listAvailableModels, type ChatMessage } from "./provider.js";
+import { listAvailableModels } from "./provider.js";
 import { PermissionState, type PermissionDecision } from "./permissions.js";
-import { applyInstructions, loadInstructions } from "./instructions.js";
+import { loadChatConfig, streamChatTurn } from "./chat.js";
 
 const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 // Keep the stdout channel reserved for structured messages.
@@ -58,7 +58,7 @@ async function chat(id: string, data: any) {
   const controller = new AbortController();
   active = controller;
   try {
-    const config = loadConfig();
+    const { config } = loadChatConfig();
     const permissions = new PermissionState({
       promptFn: (request) => new Promise((resolve) => {
         if (controller.signal.aborted) return resolve("deny");
@@ -67,11 +67,7 @@ async function chat(id: string, data: any) {
         emit({ event: "permission", data: { ...request, id: permissionId } });
       })
     });
-    const messages: ChatMessage[] = [
-      { role: "system", content: applyInstructions(config.systemPrompt, loadInstructions(process.cwd()).text) },
-      ...data.messages
-    ];
-    const result = await streamCompletion(config, messages,
+    const result = await streamChatTurn(config, data.messages,
       (chunk) => emit({ event: "chunk", data: chunk }),
       (event) => emit({ event: "tool", data: event }), controller.signal,
       { permissionState: permissions });

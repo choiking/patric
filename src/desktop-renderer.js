@@ -109,7 +109,7 @@ async function send(event) {
       responseNode.textContent = responseText || (result.stopped ? 'Response stopped.' : 'Done.');
       if (result.stopped) notice('Response stopped. Commands already started may still be running.');
     }
-    if (responseText) current.messages.push({ role: 'assistant', content: responseText });
+    if (result.ok && responseText) current.messages.push({ role: 'assistant', content: responseText });
   } catch (error) { responseNode.textContent = 'Unable to complete this response.'; notice(error.message); }
   finally {
     responseNode = undefined;

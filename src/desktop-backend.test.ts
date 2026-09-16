@@ -7,14 +7,20 @@ import path from "node:path";
 
 async function fixture(run: (client: any, directory: string) => Promise<void>) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "patric-desktop-test-"));
+  const requests: any[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const body = await request.json() as any;
+    requests.push(body);
+    if (body.messages.some((m: any) => m.role === "user" && m.content === "Compare interfaces")) {
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "Same engine." } }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }
     const toolResult = body.messages.find((m: any) => m.role === "tool");
     const delta = toolResult ? { content: "Finished safely." } : { tool_calls: [{ index: 0, id: "write-1", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "approved.txt", content: "approved" }) } }] };
     return new Response(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
+  const env = { ...process.env, HOME: directory, PATRIC_PROVIDER: "openai", PATRIC_MODEL: "test-model", PATRIC_API_KEY: "test-secret", PATRIC_OAUTH_TOKEN: "", PATRIC_BASE_URL: `http://127.0.0.1:${server.port}/v1` };
   const child = spawn(process.execPath, [path.join(import.meta.dir, "desktop-backend.ts")], {
-    env: { ...process.env, HOME: directory, PATRIC_PROVIDER: "openai", PATRIC_MODEL: "test-model", PATRIC_API_KEY: "test-secret", PATRIC_OAUTH_TOKEN: "", PATRIC_BASE_URL: `http://127.0.0.1:${server.port}/v1` },
+    env,
     stdio: ["pipe", "pipe", "pipe"]
   });
   const backlog: any[] = [];
@@ -24,6 +30,13 @@ async function fixture(run: (client: any, directory: string) => Promise<void>) {
     for (const listener of listeners) listener();
   });
   const client = {
+    requests,
+    runCli: async (prompt: string) => {
+      const cli = Bun.spawn([process.execPath, path.join(import.meta.dir, "cli.ts"), "chat", prompt], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+      const [code, stdout, stderr] = await Promise.all([cli.exited, new Response(cli.stdout).text(), new Response(cli.stderr).text()]);
+      if (code !== 0) throw new Error(stderr || stdout);
+      return stdout;
+    },
     send: (value: unknown) => child.stdin.write(JSON.stringify(value) + "\n"),
     wait: (predicate: (value: any) => boolean) => new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => { listeners.delete(check); reject(new Error("Backend response timed out")); }, 5000);
@@ -70,3 +83,19 @@ for (const decision of ["deny", "allow-once", "stop"]) {
     });
   });
 }
+
+
+test("CLI and desktop send identical model requests with project instructions", async () => {
+  await fixture(async (client, directory) => {
+    fs.writeFileSync(path.join(directory, "PATRIC.md"), "Shared project instruction: prefer small changes.");
+    const cliReply = await client.runCli("Compare interfaces");
+    client.send({ id: "parity", method: "chat", data: { cwd: directory, messages: [{ role: "user", content: "Compare interfaces" }] } });
+    const desktopReply = await client.wait((m: any) => m.id === "parity");
+    expect(desktopReply.result.ok).toBe(true);
+    expect(cliReply.trim()).toBe(desktopReply.result.content);
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[0]).toEqual(client.requests[1]);
+    const system = client.requests[0].messages.filter((m: any) => m.role === "system");
+    expect(system.map((m: any) => m.content).join("\n").split("Shared project instruction:")).toHaveLength(2);
+  });
+});

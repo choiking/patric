@@ -8,13 +8,12 @@ import {
   resolveAgentModel
 } from "./agents";
 import type { PatricConfig } from "./config";
-import { loadInstructions, applyInstructions } from "./instructions";
+import { loadChatConfig, streamChatTurn } from "./chat.js";
 import { clearStoredAuth, getAuthPath, getEffectiveAuthStatus, hasEffectiveAuth, listStoredAuth } from "./auth";
 import {
   configureProvider,
   formatConfigSummary,
   getConfigPath,
-  loadConfig,
   setConfigValue,
   setModel
 } from "./config";
@@ -77,10 +76,9 @@ async function runChat(config: PatricConfig, rest: string[]): Promise<number> {
   const userContent = withContext
     ? `${prompt}\n\nRepository context:\n${collectContext(process.cwd())}`
     : prompt;
-  const result = await streamCompletion(
+  const result = await streamChatTurn(
     config,
     [
-      { role: "system", content: config.systemPrompt },
       { role: "user", content: userContent }
     ],
     (chunk: string) => {
@@ -172,9 +170,7 @@ function printSetupHint(config: PatricConfig): void {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const config = loadConfig();
-  const { text: instructions, sources: instructionSources } = loadInstructions(process.cwd());
-  config.systemPrompt = applyInstructions(config.systemPrompt, instructions);
+  const { config, instructionSources } = loadChatConfig();
 
   if (args.length === 0) {
     await startTui(config, { instructionSources });
