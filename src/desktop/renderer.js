@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const api = window.patric;
 const defaults = { openai: 'https://api.openai.com/v1', 'openai-codex': 'https://chatgpt.com/backend-api', anthropic: 'https://api.anthropic.com', openrouter: 'https://openrouter.ai/api/v1', ollama: 'http://localhost:11434', gemini: 'https://generativelanguage.googleapis.com/v1beta' };
 let workspace = null;
+let projects = [];
 let mode = 'chat';
 let config;
 let busy = false;
@@ -20,16 +21,88 @@ function persist() {
   try { localStorage.setItem('patric.conversations', JSON.stringify(conversations.slice(0, 50))); }
   catch { notice('Conversation storage is full. This conversation may not be saved.'); }
 }
-function projectName() {
-  if (!workspace) return '';
-  return workspace.split(/[\\/]/).filter(Boolean).pop() || workspace;
+function projectName(target) {
+  if (!target) return '';
+  return target.split(/[\\/]/).filter(Boolean).pop() || target;
 }
-function setWorkspace(value) {
-  workspace = value || null;
-  $('workspace-name').textContent = workspace ? projectName() : 'Open a project folder';
-  $('workspace-detail').textContent = workspace ? workspace.replace(/^.*[\\/](?=[^\\/]+[\\/][^\\/]+$)/, '…/') : 'Required for Code mode';
-  $('workspace').title = workspace || 'No project is open';
+function projectParent(target) {
+  const parent = target.slice(0, target.length - projectName(target).length).replace(/[\\/]$/, '');
+  return parent.replace(/^.*[\\/](?=[^\\/]+$)/, '…/') || parent;
+}
+function conversationsFor(project) {
+  return conversations.filter(c => c.mode === 'code' && c.workspace === project);
+}
+function conversationButton(conversation) {
+  const button = document.createElement('button');
+  button.className = `conversation${current?.id === conversation.id ? ' active' : ''}`;
+  button.textContent = conversation.title;
+  button.title = conversation.title;
+  button.disabled = busy;
+  button.onclick = () => { current = conversation; renderMessages(); renderMode(); notice(); };
+  return button;
+}
+function emptyLine(text) {
+  const p = document.createElement('p');
+  p.className = 'empty-history';
+  p.textContent = text;
+  return p;
+}
+/** Each folder is its own project: its own binding and its own conversations,
+ *  listed under it so Code mode has no conversation list detached from a folder. */
+function renderProjects() {
+  $('projects').replaceChildren();
+  for (const project of projects) {
+    const active = project === workspace;
+    const group = document.createElement('div');
+    group.className = `project-group${active ? ' active' : ''}`;
+    const row = document.createElement('div');
+    row.className = 'project';
+    const open = document.createElement('button');
+    open.className = 'project-open';
+    open.title = project;
+    open.disabled = busy;
+    const name = document.createElement('strong');
+    name.textContent = projectName(project);
+    const parent = document.createElement('small');
+    parent.textContent = projectParent(project);
+    open.append(name, parent);
+    open.onclick = () => selectProject(project);
+    const items = conversationsFor(project);
+    if (!active && items.length) {
+      const count = document.createElement('em');
+      count.className = 'project-count';
+      count.textContent = String(items.length);
+      count.title = `${items.length} conversation${items.length === 1 ? '' : 's'}`;
+      open.append(count);
+    }
+    const forget = document.createElement('button');
+    forget.className = 'project-forget';
+    forget.textContent = '×';
+    forget.disabled = busy;
+    forget.title = `Remove ${projectName(project)} from this list`;
+    forget.setAttribute('aria-label', `Remove ${projectName(project)} from this list`);
+    forget.onclick = () => forgetProject(project);
+    row.append(open, forget);
+    group.append(row);
+    // Only the open project expands: its conversations are the ones you can resume.
+    if (active) {
+      const list = document.createElement('nav');
+      list.className = 'project-conversations';
+      list.setAttribute('aria-label', `Conversations in ${projectName(project)}`);
+      list.append(...(items.length ? items.map(conversationButton) : [emptyLine('No conversations yet.')]));
+      group.append(list);
+    }
+    $('projects').append(group);
+  }
+  if (!projects.length) $('projects').append(emptyLine('Open a folder to start a project.'));
+}
+function setProjects(state) {
+  const changed = state.workspace !== workspace;
+  workspace = state.workspace || null;
+  projects = Array.isArray(state.projects) ? state.projects : [];
+  if (changed) { current = undefined; notice(); }
   renderMode();
+  if (changed) renderMessages();
 }
 const MODES = {
   chat: {
@@ -61,12 +134,13 @@ function renderMode() {
   $('mode-code').classList.toggle('active', mode === 'code');
   $('mode-hint').textContent = copy.hint;
   $('workspace-section').hidden = mode !== 'code';
+  renderProjects();
   $('welcome-eyebrow').textContent = copy.eyebrow;
   $('welcome-subtitle').replaceChildren(copy.subtitle[0], document.createElement('br'), copy.subtitle[1]);
   $('chat-suggestions').hidden = mode !== 'chat';
   $('code-suggestions').hidden = mode !== 'code';
   $('header-mode').textContent = mode === 'chat' ? 'Chat' : 'Code';
-  $('header-project').textContent = mode === 'chat' ? 'Conversation' : projectName() || 'No project';
+  $('header-project').textContent = mode === 'chat' ? 'Conversation' : projectName(workspace) || 'No project';
   $('local-status-text').textContent = copy.status;
   $('composer-note-left').textContent = copy.noteLeft;
   $('composer-note-right').textContent = copy.noteRight;
@@ -85,23 +159,15 @@ async function switchMode(next) {
   renderMessages();
   if (mode === 'chat' || workspace) $('prompt').focus();
 }
+/** Chat has no folders to group by, so it keeps a flat list of its own. */
 function renderHistory() {
+  const flat = mode === 'chat';
+  $('history-label').hidden = !flat;
+  $('conversations').hidden = !flat;
   $('conversations').replaceChildren();
-  const items = conversations.filter(c => c.mode === mode && (mode === 'chat' || c.workspace === workspace));
-  for (const conversation of items) {
-    const button = document.createElement('button');
-    button.className = `conversation${current?.id === conversation.id ? ' active' : ''}`;
-    button.textContent = conversation.title;
-    button.disabled = busy;
-    button.onclick = () => { current = conversation; renderMessages(); renderHistory(); notice(); };
-    $('conversations').append(button);
-  }
-  if (!items.length) {
-    const p = document.createElement('p');
-    p.className = 'empty-history';
-    p.textContent = mode === 'chat' ? 'A fresh space for your next idea.' : 'No conversations in this project yet.';
-    $('conversations').append(p);
-  }
+  if (!flat) return;
+  const items = conversations.filter(c => c.mode === 'chat');
+  $('conversations').append(...(items.length ? items.map(conversationButton) : [emptyLine('A fresh space for your next idea.')]));
 }
 function addMessage(role, content) {
   const article = document.createElement('article');
@@ -127,7 +193,8 @@ function fresh() {
   if (busy) return;
   current = undefined;
   renderMessages();
-  renderHistory();
+  // renderMode redraws the project groups too, clearing the active conversation.
+  renderMode();
   notice();
   $('prompt').focus();
 }
@@ -139,7 +206,8 @@ function setBusy(value) {
   $('stop').disabled = false;
   $('prompt').disabled = value;
   $('run-status').textContent = value ? 'Working…' : 'Enter to send';
-  renderHistory();
+  // renderMode covers the project list too, which also locks while a turn runs.
+  renderMode();
 }
 async function send(event) {
   event.preventDefault();
@@ -254,10 +322,18 @@ $('refresh-models').onclick = async () => {
   finally { $('refresh-models').disabled = false; }
 };
 async function chooseWorkspace() {
-  try {
-    const next = await api.chooseWorkspace();
-    if (next !== workspace) { setWorkspace(next); fresh(); }
-  } catch (error) { notice(error.message); }
+  try { setProjects(await api.chooseWorkspace()); }
+  catch (error) { notice(error.message); }
+}
+async function selectProject(project) {
+  if (busy || project === workspace) return;
+  try { setProjects(await api.selectProject(project)); }
+  catch (error) { notice(error.message); }
+}
+async function forgetProject(project) {
+  if (busy) return;
+  try { setProjects(await api.forgetProject(project)); }
+  catch (error) { notice(error.message); }
 }
 $('workspace').onclick = chooseWorkspace;
 $('gate-open').onclick = chooseWorkspace;
@@ -287,7 +363,7 @@ async function initialize() {
     const [initial, settings] = await Promise.all([api.initial(), api.settings()]);
     config = settings;
     mode = initial.mode === 'code' ? 'code' : 'chat';
-    setWorkspace(initial.workspace);
+    setProjects(initial);
     updateModel();
     renderMessages();
   } catch (error) { notice(error.message); }

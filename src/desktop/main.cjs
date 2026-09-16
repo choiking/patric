@@ -10,7 +10,10 @@ let backend;
 let sequence = 0;
 // Code mode stays unbound until the user opens a project; chat mode needs no folder.
 let workspace = null;
+// Every folder the user has opened, most recent first, so Code mode can switch between them.
+let projects = [];
 let mode = 'chat';
+const MAX_PROJECTS = 12;
 let busy = false;
 const pending = new Map();
 const page = pathToFileURL(path.join(__dirname, 'index.html')).href;
@@ -22,8 +25,14 @@ function isDirectory(target) {
 function saveState() {
   try {
     fs.mkdirSync(app.getPath('userData'), { recursive: true });
-    fs.writeFileSync(statePath(), JSON.stringify({ workspace, mode }));
+    fs.writeFileSync(statePath(), JSON.stringify({ workspace, projects, mode }));
   } catch { /* A read-only profile just means the next launch starts unbound. */ }
+}
+function rememberProject(target) {
+  projects = [target, ...projects.filter(project => project !== target)].slice(0, MAX_PROJECTS);
+}
+function projectState() {
+  return { workspace, projects };
 }
 function startBackend() {
   const bundled = path.join(process.resourcesPath, 'patric-bun');
@@ -91,9 +100,31 @@ function registerHandlers() {
     const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'], title: 'Open a project' });
     if (!result.canceled) {
       workspace = result.filePaths[0];
+      rememberProject(workspace);
       saveState();
     }
-    return workspace;
+    return projectState();
+  });
+  // Only folders the user already picked from the dialog can be bound, so the
+  // renderer can switch projects without being able to name a new path itself.
+  ipcMain.handle('patric:selectProject', (event, target) => {
+    trusted(event);
+    if (busy) throw new Error('Stop the response before changing projects.');
+    if (!projects.includes(target)) throw new Error('That project is not on the list. Open the folder again.');
+    if (!isDirectory(target)) throw new Error('That project folder is no longer available. Open it again.');
+    workspace = target;
+    rememberProject(target);
+    saveState();
+    return projectState();
+  });
+  ipcMain.handle('patric:forgetProject', (event, target) => {
+    trusted(event);
+    if (busy) throw new Error('Stop the response before changing projects.');
+    projects = projects.filter(project => project !== target);
+    // Forgetting the open project unbinds Code mode; the folder itself is untouched.
+    if (workspace === target) workspace = null;
+    saveState();
+    return projectState();
   });
   ipcMain.handle('patric:mode', (event, value) => {
     trusted(event);
@@ -102,7 +133,7 @@ function registerHandlers() {
     saveState();
     return mode;
   });
-  ipcMain.handle('patric:initial', event => { trusted(event); return { workspace, mode }; });
+  ipcMain.handle('patric:initial', event => { trusted(event); return { ...projectState(), mode }; });
 }
 function createWindow() {
   window = new BrowserWindow({ width: 1220, height: 840, minWidth: 800, minHeight: 600,
@@ -125,7 +156,13 @@ app.whenReady().then(() => {
   ]));
   try {
     const saved = JSON.parse(fs.readFileSync(statePath(), 'utf8'));
-    if (typeof saved.workspace === 'string' && isDirectory(saved.workspace)) workspace = saved.workspace;
+    // Folders that moved or were deleted drop off the list instead of failing later.
+    const remembered = Array.isArray(saved.projects) ? saved.projects : [];
+    projects = remembered.filter(project => typeof project === 'string' && isDirectory(project)).slice(0, MAX_PROJECTS);
+    if (typeof saved.workspace === 'string' && isDirectory(saved.workspace)) {
+      workspace = saved.workspace;
+      rememberProject(workspace);
+    }
     if (saved.mode === 'chat' || saved.mode === 'code') mode = saved.mode;
   } catch { /* First launch or a moved project: start in chat mode with no project. */ }
   if (mode === 'code' && !workspace) mode = 'chat';

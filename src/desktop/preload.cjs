@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('patric', {
   models: () => ipcRenderer.invoke('patric:request', 'models'),
   chat: (messages, mode) => ipcRenderer.invoke('patric:request', 'chat', { messages, mode }),
   chooseWorkspace: () => ipcRenderer.invoke('patric:workspace'),
+  selectProject: path => ipcRenderer.invoke('patric:selectProject', path),
+  forgetProject: path => ipcRenderer.invoke('patric:forgetProject', path),
   setMode: mode => ipcRenderer.invoke('patric:mode', mode),
   stop: () => ipcRenderer.send('patric:signal', 'stop'),
   permission: (id, decision) => ipcRenderer.send('patric:signal', 'permission', { id, decision }),

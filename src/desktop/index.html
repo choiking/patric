@@ -18,10 +18,11 @@
     <p id="mode-hint" class="mode-hint">Talk things through. No tools, no project.</p>
     <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ N</kbd></button>
     <div id="workspace-section">
-      <div class="section-label">WORKSPACE</div>
-      <button id="workspace" class="workspace"><span class="folder-icon">▱</span><span><strong id="workspace-name">Open a project folder</strong><small id="workspace-detail">Required for Code mode</small></span><span class="chevron">⌄</span></button>
+      <div class="section-label">PROJECTS</div>
+      <nav id="projects" aria-label="Projects"></nav>
+      <button id="workspace" class="open-project"><span>＋</span> Open a folder…</button>
     </div>
-    <div class="section-label recent-label">RECENT CONVERSATIONS</div>
+    <div class="section-label recent-label" id="history-label">RECENT CONVERSATIONS</div>
     <nav id="conversations" aria-label="Conversations"></nav>
     <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span> <span id="local-status-text">Conversation only</span></div><button id="settings-button">⚙ <span>Settings</span><span class="shortcut">⌘ ,</span></button></div>
   </aside>
