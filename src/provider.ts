@@ -1284,6 +1284,7 @@ async function streamWithToolLoop(
 
   try {
     for (let iteration = 0; iteration < MAX_TOOL_ROUNDS; iteration++) {
+      signal?.throwIfAborted();
       debugLog(`--- iteration ${iteration} start (provider=${provider})`);
       let providerResponse: ProviderResponse;
 
@@ -1338,6 +1339,7 @@ async function streamWithToolLoop(
       usedTools = true;
       const toolResults: ToolResult[] = [];
       for (const call of providerResponse.toolCalls) {
+        signal?.throwIfAborted();
         debugLog(`tool_start: ${call.name} args=${JSON.stringify(call.arguments).slice(0, 200)}`);
 
         // Permission check
@@ -1363,6 +1365,7 @@ async function streamWithToolLoop(
           }
         }
 
+        signal?.throwIfAborted();
         onToolEvent?.({ type: "tool_start", name: call.name, arguments: call.arguments });
         const result = await executeTool(call, {
           allowedToolNames: runtimeContext.allowedToolNames,

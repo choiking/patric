@@ -19,6 +19,52 @@ connecting to direct OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and G
 - Config file stored at `~/.config/patric/config.json`
 - Multi-provider support: direct OpenAI, OpenAI Codex, OpenRouter, Anthropic, Ollama, Gemini
 
+## Desktop app
+
+Patric includes an Electron desktop app with streaming chat, project selection,
+per-project conversation history, provider/model settings, live model discovery,
+and tool activity. File changes and command execution require an **Allow once**
+decision in the desktop window. Existing CLI credentials are reused; API keys are
+not sent back to the renderer.
+
+```bash
+bun install
+bun run desktop
+```
+
+The first launch downloads Electron if needed. Desktop development and packaging
+require Bun and Node.js 22.12+ (the CLI still supports its existing runtime).
+Build a native app for the current platform and architecture:
+
+```bash
+bun run desktop:build
+```
+
+On Apple Silicon, open `dist/Patric-darwin-arm64/Patric.app`. The bundle includes
+Bun, so the packaged app does not require a separate Bun installation. Builds are
+unsigned local builds; signing, notarization, installers, and automatic updates
+are not configured. Other platforms have not been tested.
+
+Choose a project using the workspace button. Settings share the CLI config at
+`~/.config/patric/config.json`; environment overrides apply to both interfaces.
+OAuth login still runs through the CLI (`patric auth login openai-codex` or the
+existing Gemini login flow). Conversation text is stored locally in Electron's
+app data, with up to 50 recent conversations. Tool logs are shown for the current
+turn but are not persisted. `Cmd/Ctrl+N` starts a conversation, `Cmd/Ctrl+,` opens
+settings, Enter sends, and Shift+Enter adds a newline.
+
+**Stop** cancels model output and prevents subsequent tools from starting. An
+already-running shell command or browser action may finish. Closing the app while
+working asks for confirmation. Desktop approvals are scoped to a single action;
+saved CLI tool allowances are not automatically applied in the desktop app.
+Browser tools retain the CLI's existing Playwright/browser setup requirements.
+
+Validation: `bun test` includes mock-provider desktop integration tests for
+credential redaction, input validation, overlapping requests, denied/approved
+file writes, and stopping at an approval prompt. These tests need permission to
+bind a localhost port. The renderer uses a sandboxed preload bridge and context
+isolation following [Electron's security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
+
 ## Usage
 
 ```bash

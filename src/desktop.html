@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Patric</title>
+  <link rel="stylesheet" href="desktop.css">
+  <script src="desktop-renderer.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">p<span>·</span></span><strong>patric</strong><span class="desktop-label">DESKTOP</span></div>
+    <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ N</kbd></button>
+    <div class="section-label">WORKSPACE</div>
+    <button id="workspace" class="workspace"><span class="folder-icon">▱</span><span><strong id="workspace-name">Choose a project</strong><small>Local project</small></span><span class="chevron">⌄</span></button>
+    <div class="section-label recent-label">RECENT CONVERSATIONS</div>
+    <nav id="conversations" aria-label="Conversations"></nav>
+    <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span> Your workspace, connected</div><button id="settings-button">⚙ <span>Settings</span><span class="shortcut">⌘ ,</span></button></div>
+  </aside>
+  <main>
+    <header><div><span class="breadcrumb">Workspace</span><span class="slash">/</span><span id="header-project">Patric</span></div><span class="local-badge"><span class="status-dot"></span> LOCAL</span></header>
+    <div id="scroll-area">
+      <section id="welcome">
+        <div class="eyebrow"><span class="spark">✳</span> YOUR CODING COMPANION</div>
+        <h1>A little curiosity.<br>A lot of possibility.</h1>
+        <p>Build something new, untangle a problem, or get to know your code.<br>Pick a project. Let’s make progress.</p>
+        <div class="suggestions">
+          <button data-prompt="Explore this repository and explain its architecture. Start by reading the project instructions."><span>⌘</span><strong>Explore this project</strong><small>Find your way around the code</small><b>↗</b></button>
+          <button data-prompt="Review this repository for likely bugs. Explain the most important findings before making changes."><span>⌕</span><strong>Find a bug</strong><small>A fresh pair of eyes on your code</small><b>↗</b></button>
+          <button data-prompt="Help me plan a new feature for this project. First inspect the repository, then ask what I want to build."><span>✧</span><strong>Build something</strong><small>Turn an idea into a first step</small><b>↗</b></button>
+        </div>
+      </section>
+      <section id="messages" aria-label="Chat messages" aria-live="polite"></section>
+    </div>
+    <div class="composer-area">
+      <div id="notice" role="status" hidden></div>
+      <section id="permission" hidden><strong>Permission needed</strong><pre id="permission-detail"></pre><div><button id="deny">Deny</button><button id="allow" class="primary">Allow once</button></div></section>
+      <form id="composer"><textarea id="prompt" placeholder="What would you like to work on?" aria-label="Message Patric" rows="3"></textarea><div class="composer-footer"><button type="button" id="model-button"><span class="model-dot">✳</span><span id="model-label">Configure a model</span><span>⌄</span></button><div class="send-group"><small id="run-status">Enter to send</small><button id="send" type="submit" aria-label="Send message">↑</button><button id="stop" type="button" hidden>■ Stop</button></div></div></form>
+      <div class="composer-note"><span>Local tools. Your choice of model.</span><span>Patric asks before changing files or running commands.</span></div>
+    </div>
+  </main>
+  <dialog id="settings-dialog">
+    <form id="settings-form"><div class="dialog-heading"><div class="eyebrow">MAKE YOURSELF AT HOME</div><h2>Model settings</h2><p>Uses the same configuration and credentials as the CLI.</p></div>
+      <label>Provider<select id="provider"><option value="openai">OpenAI</option><option value="openai-codex">ChatGPT Codex</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama</option><option value="gemini">Gemini</option></select></label>
+      <label>Model<div class="model-field"><input id="model" list="model-options" required placeholder="Enter a model ID"><button type="button" id="refresh-models">Refresh models</button></div><datalist id="model-options"></datalist></label>
+      <label>Base URL<input id="base-url" type="url" required></label>
+      <label>API key<input id="api-key" type="password" autocomplete="off" placeholder="Leave empty to keep existing credentials"></label>
+      <p class="settings-help">For ChatGPT Codex, sign in first with <code>patric auth login openai-codex</code> in your terminal. Model discovery uses your saved provider settings.</p>
+      <p id="settings-error" role="status"></p><div class="dialog-actions"><button id="close-settings" type="button">Cancel</button><button class="primary" type="submit">Save settings</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
