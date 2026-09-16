@@ -47,6 +47,8 @@ export interface ChatMessage {
 
 export interface RuntimeContext {
   allowedToolNames?: string[];
+  /** Chat mode turns the tool loop off entirely: no tools are offered to the model. */
+  toolsEnabled?: boolean;
   agentManager?: AgentManager;
   agentRegistry?: AgentRegistry;
   agent?: {
@@ -486,6 +488,11 @@ async function createRuntimeContext(
     agent: runtimeContext?.agent || { kind: "top-level" }
   };
 
+  // Tool-free chat needs no registry, no sub-agents, and no working directory.
+  if (baseContext.toolsEnabled === false) {
+    return { ...baseContext, allowedToolNames: [], agent: { kind: "top-level" } };
+  }
+
   if (baseContext.agent?.kind === "sub-agent") {
     return {
       ...baseContext,
@@ -587,6 +594,9 @@ ALWAYS call the tools. Never just acknowledge without saving.`;
 
 function buildEffectiveMessages(messages: ChatMessage[], runtimeContext: RuntimeContext): ChatMessage[] {
   const extra: ChatMessage[] = [];
+
+  // Both reminders below describe tools, so they are noise when tools are off.
+  if (runtimeContext.toolsEnabled === false) return messages;
 
   if (runtimeContext.agent?.kind === "top-level" && runtimeContext.agentRegistry && runtimeContext.agentRegistry.all.length > 0) {
     extra.push({
@@ -1186,7 +1196,9 @@ async function streamWithToolLoop(
   runtimeContext: RuntimeContext = {}
 ): Promise<CompletionResult> {
   const provider = normalizeProvider(config);
-  const tools = getToolsForProvider(provider, runtimeContext.allowedToolNames);
+  const tools = runtimeContext.toolsEnabled === false
+    ? []
+    : getToolsForProvider(provider, runtimeContext.allowedToolNames);
 
   let rawMessages: any[];
   let codexInstructions = "";

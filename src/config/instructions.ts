@@ -11,7 +11,13 @@ export interface InstructionSources {
   user?: string;
 }
 
-export function loadInstructions(cwd: string): { text: string; sources: InstructionSources } {
+export interface InstructionOptions {
+  /** Chat mode has no bound project, so project-level PATRIC.md is skipped. */
+  includeProject?: boolean;
+}
+
+export function loadInstructions(cwd: string, options: InstructionOptions = {}): { text: string; sources: InstructionSources } {
+  const includeProject = options.includeProject !== false;
   const sources: InstructionSources = {};
   const root = findRepoRoot(cwd) || cwd;
   const configDir = join(process.env.HOME || "", ".config", "patric");
@@ -43,7 +49,7 @@ export function loadInstructions(cwd: string): { text: string; sources: Instruct
   // PATRIC.md — project-level instructions (from repo root)
   const patricPath = join(root, "PATRIC.md");
   let patricText = "";
-  if (existsSync(patricPath) && patricPath !== patricUserPath) {
+  if (includeProject && existsSync(patricPath) && patricPath !== patricUserPath) {
     patricText = readSafe(patricPath);
     sources.patric = patricPath;
   }

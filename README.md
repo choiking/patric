@@ -21,9 +21,23 @@ connecting to direct OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and G
 
 ## Desktop app
 
-Patric includes an Electron desktop app with streaming chat, project selection,
-per-project conversation history, provider/model settings, live model discovery,
-and tool activity. File changes and command execution prompt for **Allow once** or **Always allow**
+Patric includes an Electron desktop app with two modes, streaming responses,
+conversation history, provider/model settings, live model discovery, and tool
+activity.
+
+**Chat** is a plain conversation. No tools are sent to the model, so it cannot
+read or change files, run commands, browse the web, or read and save memory, and
+it needs no project. Project `PATRIC.md` instructions are not loaded; your
+user-level `USER.md`, `SOUL.md`, and `PATRIC.md` still apply.
+
+**Code** is the coding agent and must be bound to a local folder. Until you open
+one, the composer is replaced by a prompt to choose a project; every turn then
+runs with that folder as the working directory and the full tool set. Switch
+modes with the sidebar toggle, `Cmd/Ctrl+1` (Chat), or `Cmd/Ctrl+2` (Code).
+Conversations are listed per mode, and Code conversations per project. The
+current mode and project are remembered across restarts.
+
+In Code mode, file changes and command execution prompt for **Allow once** or **Always allow**
 unless the tool is already allowed. **Always allow** saves the tool name in the
 shared config’s `allowedTools` list and applies across projects, conversations,
 and restarts, including terminal chat. Remove the tool from that list to revoke it. Existing CLI credentials are reused; API keys are
@@ -47,13 +61,14 @@ Bun, so the packaged app does not require a separate Bun installation. Builds ar
 unsigned local builds; signing, notarization, installers, and automatic updates
 are not configured. Other platforms have not been tested.
 
-Choose a project using the workspace button. Settings share the CLI config at
+Choose a project using the workspace button in Code mode. Settings share the CLI config at
 `~/.config/patric/config.json`; environment overrides apply to both interfaces.
 OAuth login still runs through the CLI (`patric auth login openai-codex` or the
 existing Gemini login flow). Conversation text is stored locally in Electron's
 app data, with up to 50 recent conversations. Tool logs are shown for the current
 turn but are not persisted. `Cmd/Ctrl+N` starts a conversation, `Cmd/Ctrl+,` opens
-settings, Enter sends, and Shift+Enter adds a newline.
+settings, `Cmd/Ctrl+1` and `Cmd/Ctrl+2` switch modes, Enter sends, and
+Shift+Enter adds a newline.
 
 **Stop** cancels model output and prevents subsequent tools from starting. An
 already-running shell command or browser action may finish. Closing the app while
@@ -63,22 +78,24 @@ Browser tools retain the CLI's existing Playwright/browser setup requirements.
 
 Validation: `bun test` includes mock-provider desktop integration tests for
 credential redaction, input validation, overlapping requests, denied/approved
-file writes, and stopping at an approval prompt. These tests need permission to
+file writes, stopping at an approval prompt, and a Chat-mode turn that sends no
+tools and no project instructions. These tests need permission to
 bind a localhost port. The renderer uses a sandboxed preload bridge and context
 isolation following [Electron's security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
 
 ### Shared engine
 
 CLI chat, terminal chat, and desktop chat all enter through `src/core/chat.ts`.
-`loadChatConfig` loads configuration and project instructions;
-`streamChatTurn` builds the system message and calls the existing provider/tool
-engine. The desktop backend only adapts window requests and events to that engine.
+`loadChatConfig` loads configuration and instructions for the requested mode
+(`code` or `chat`); `streamChatTurn` builds the system message and calls the
+existing provider/tool engine. Chat mode passes `toolsEnabled: false`, so no
+tools reach the provider and the tool loop never runs. The desktop backend only adapts window requests and events to that engine.
 A mock-provider integration test compares the complete outgoing CLI and desktop
 requests for the same prompt, settings, and project instructions.
 
 Interface differences are explicit: terminal chat supports remembered approvals
-and slash commands, desktop chat supports one-time and persistent approvals and stores its own
-conversations, and one-shot CLI chat retains its existing non-interactive tool
+and slash commands, desktop chat adds the Chat/Code split, supports one-time and
+persistent approvals, and stores its own conversations, and one-shot CLI chat retains its existing non-interactive tool
 policy. Authentication and settings screens differ, but provider discovery,
 credential resolution, model requests, and tool implementations are shared.
 

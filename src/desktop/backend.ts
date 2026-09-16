@@ -1,8 +1,9 @@
+import os from "node:os";
 import readline from "node:readline";
 import { loadConfig, configureProvider, setConfigValue, rememberAllowedTool } from "../config/config.js";
 import { listAvailableModels } from "../core/provider.js";
 import { PermissionState, type PermissionDecision } from "../core/permissions.js";
-import { loadChatConfig, streamChatTurn } from "../core/chat.js";
+import { loadChatConfig, isChatMode, streamChatTurn, type ChatMode } from "../core/chat.js";
 
 const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 // Keep the stdout channel reserved for structured messages.
@@ -54,11 +55,26 @@ async function chat(id: string, data: any) {
       data.messages.some((m: any) => !["user", "assistant"].includes(m.role) || typeof m.content !== "string")) {
     throw new Error("Invalid conversation.");
   }
-  process.chdir(data.cwd);
+  const mode: ChatMode = isChatMode(data.mode) ? data.mode : "code";
+  // Code mode runs inside the bound workspace; chat mode has no project to enter.
+  if (mode === "code") {
+    if (typeof data.cwd !== "string" || !data.cwd) throw new Error("Open a project folder to use Code mode.");
+    try { process.chdir(data.cwd); }
+    catch { throw new Error("That project folder is no longer available. Open it again."); }
+  } else {
+    process.chdir(os.homedir());
+  }
   const controller = new AbortController();
   active = controller;
   try {
-    const { config } = loadChatConfig();
+    const { config } = loadChatConfig(process.cwd(), mode);
+    if (mode === "chat") {
+      const result = await streamChatTurn(config, data.messages,
+        (chunk) => emit({ event: "chunk", data: chunk }), undefined, controller.signal,
+        { toolsEnabled: false });
+      emit({ id, result: { ...result, stopped: controller.signal.aborted } });
+      return;
+    }
     const permissions = new PermissionState({
       configAllowed: config.allowedTools,
       promptFn: (request) => new Promise((resolve) => {
