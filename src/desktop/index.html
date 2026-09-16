@@ -11,21 +11,33 @@
 <body>
   <aside class="sidebar">
     <div class="brand"><span class="brand-mark">p<span>·</span></span><strong>patric</strong><span class="desktop-label">DESKTOP</span></div>
+    <div class="mode-switch" role="tablist" aria-label="Mode">
+      <button id="mode-chat" role="tab" aria-selected="true"><span>✳</span>Chat<kbd>⌘ 1</kbd></button>
+      <button id="mode-code" role="tab" aria-selected="false"><span>⌘</span>Code<kbd>⌘ 2</kbd></button>
+    </div>
+    <p id="mode-hint" class="mode-hint">Talk things through. No tools, no project.</p>
     <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ N</kbd></button>
-    <div class="section-label">WORKSPACE</div>
-    <button id="workspace" class="workspace"><span class="folder-icon">▱</span><span><strong id="workspace-name">Choose a project</strong><small>Local project</small></span><span class="chevron">⌄</span></button>
+    <div id="workspace-section">
+      <div class="section-label">WORKSPACE</div>
+      <button id="workspace" class="workspace"><span class="folder-icon">▱</span><span><strong id="workspace-name">Open a project folder</strong><small id="workspace-detail">Required for Code mode</small></span><span class="chevron">⌄</span></button>
+    </div>
     <div class="section-label recent-label">RECENT CONVERSATIONS</div>
     <nav id="conversations" aria-label="Conversations"></nav>
-    <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span> Your workspace, connected</div><button id="settings-button">⚙ <span>Settings</span><span class="shortcut">⌘ ,</span></button></div>
+    <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span> <span id="local-status-text">Conversation only</span></div><button id="settings-button">⚙ <span>Settings</span><span class="shortcut">⌘ ,</span></button></div>
   </aside>
   <main>
-    <header><div><span class="breadcrumb">Workspace</span><span class="slash">/</span><span id="header-project">Patric</span></div><span class="local-badge"><span class="status-dot"></span> LOCAL</span></header>
+    <header><div><span class="breadcrumb" id="header-mode">Chat</span><span class="slash">/</span><span id="header-project">No project</span></div><span class="local-badge"><span class="status-dot"></span> LOCAL</span></header>
     <div id="scroll-area">
       <section id="welcome">
-        <div class="eyebrow"><span class="spark">✳</span> YOUR CODING COMPANION</div>
-        <h1>A little curiosity.<br>A lot of possibility.</h1>
-        <p>Build something new, untangle a problem, or get to know your code.<br>Pick a project. Let’s make progress.</p>
-        <div class="suggestions">
+        <div class="eyebrow"><span class="spark">✳</span> <span id="welcome-eyebrow">A PLACE TO THINK OUT LOUD</span></div>
+        <h1 id="welcome-title">A little curiosity.<br>A lot of possibility.</h1>
+        <p id="welcome-subtitle">Ask a question, sketch an idea, or talk a problem through.<br>Nothing on your machine is touched.</p>
+        <div class="suggestions" id="chat-suggestions">
+          <button data-prompt="Explain how OAuth 2.0 authorization code flow with PKCE works, and when to use it."><span>✳</span><strong>Explain something</strong><small>A clear answer, no setup needed</small><b>↗</b></button>
+          <button data-prompt="I want to think through a design decision. Ask me questions until you understand the problem, then give me options with trade-offs."><span>◇</span><strong>Think it through</strong><small>Weigh options before you build</small><b>↗</b></button>
+          <button data-prompt="Here is some code. Review it and tell me what you would change:"><span>⌕</span><strong>Paste and review</strong><small>Bring the code to the conversation</small><b>↗</b></button>
+        </div>
+        <div class="suggestions" id="code-suggestions" hidden>
           <button data-prompt="Explore this repository and explain its architecture. Start by reading the project instructions."><span>⌘</span><strong>Explore this project</strong><small>Find your way around the code</small><b>↗</b></button>
           <button data-prompt="Review this repository for likely bugs. Explain the most important findings before making changes."><span>⌕</span><strong>Find a bug</strong><small>A fresh pair of eyes on your code</small><b>↗</b></button>
           <button data-prompt="Help me plan a new feature for this project. First inspect the repository, then ask what I want to build."><span>✧</span><strong>Build something</strong><small>Turn an idea into a first step</small><b>↗</b></button>
@@ -35,9 +47,14 @@
     </div>
     <div class="composer-area">
       <div id="notice" role="status" hidden></div>
+      <section id="workspace-gate" hidden>
+        <strong>Code mode needs a project</strong>
+        <p>Open a local folder to bind this mode to it. Patric reads and changes files, runs commands, and asks before each tool it has not been allowed.</p>
+        <button id="gate-open" class="primary" type="button">Open a project folder…</button>
+      </section>
       <section id="permission" hidden><strong>Permission needed</strong><pre id="permission-detail"></pre><p id="permission-scope"></p><div><button id="deny">Deny</button><button id="allow">Allow once</button><button id="allow-always" class="primary">Always allow</button></div></section>
       <form id="composer"><textarea id="prompt" placeholder="What would you like to work on?" aria-label="Message Patric" rows="3"></textarea><div class="composer-footer"><button type="button" id="model-button"><span class="model-dot">✳</span><span id="model-label">Configure a model</span><span>⌄</span></button><div class="send-group"><small id="run-status">Enter to send</small><button id="send" type="submit" aria-label="Send message">↑</button><button id="stop" type="button" hidden>■ Stop</button></div></div></form>
-      <div class="composer-note"><span>Local tools. Your choice of model.</span><span>Patric asks before using tools you haven’t allowed.</span></div>
+      <div class="composer-note"><span id="composer-note-left">Conversation only. Your choice of model.</span><span id="composer-note-right">No files are read or changed in Chat mode.</span></div>
     </div>
   </main>
   <dialog id="settings-dialog">

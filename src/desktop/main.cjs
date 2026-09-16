@@ -8,16 +8,28 @@ const { pathToFileURL } = require('node:url');
 let window;
 let backend;
 let sequence = 0;
-let workspace = app.isPackaged ? os.homedir() : process.cwd();
+// Code mode stays unbound until the user opens a project; chat mode needs no folder.
+let workspace = null;
+let mode = 'chat';
 let busy = false;
 const pending = new Map();
 const page = pathToFileURL(path.join(__dirname, 'index.html')).href;
 
+function statePath() { return path.join(app.getPath('userData'), 'workspace.json'); }
+function isDirectory(target) {
+  try { return fs.statSync(target).isDirectory(); } catch { return false; }
+}
+function saveState() {
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(statePath(), JSON.stringify({ workspace, mode }));
+  } catch { /* A read-only profile just means the next launch starts unbound. */ }
+}
 function startBackend() {
   const bundled = path.join(process.resourcesPath, 'patric-bun');
   const bun = process.env.PATRIC_BUN || [path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun'].find(fs.existsSync) || 'bun';
   backend = spawn(app.isPackaged ? bundled : bun, [path.join(__dirname, 'backend.ts')], {
-    cwd: workspace, stdio: ['pipe', 'pipe', 'pipe'], env: process.env
+    cwd: workspace || os.homedir(), stdio: ['pipe', 'pipe', 'pipe'], env: process.env
   });
   createInterface({ input: backend.stdout }).on('line', line => {
     let message;
@@ -60,8 +72,13 @@ function registerHandlers() {
     if (!['settings', 'saveSettings', 'models', 'chat'].includes(method)) throw new Error('Unknown request.');
     if (method !== 'chat') return request(method, data);
     if (busy) throw new Error('A response is already running.');
+    const requested = data.mode === 'chat' ? 'chat' : 'code';
+    if (requested === 'code') {
+      if (!workspace) throw new Error('Open a project folder to use Code mode.');
+      if (!isDirectory(workspace)) throw new Error('That project folder is no longer available. Open it again.');
+    }
     busy = true;
-    try { return await request(method, { messages: data.messages, cwd: workspace }); }
+    try { return await request(method, { messages: data.messages, mode: requested, cwd: requested === 'code' ? workspace : undefined }); }
     finally { busy = false; }
   });
   ipcMain.on('patric:signal', (event, method, data) => {
@@ -74,12 +91,18 @@ function registerHandlers() {
     const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'], title: 'Open a project' });
     if (!result.canceled) {
       workspace = result.filePaths[0];
-      fs.mkdirSync(app.getPath('userData'), { recursive: true });
-      fs.writeFileSync(path.join(app.getPath('userData'), 'workspace.json'), JSON.stringify({ workspace }));
+      saveState();
     }
     return workspace;
   });
-  ipcMain.handle('patric:initial', event => { trusted(event); return { workspace }; });
+  ipcMain.handle('patric:mode', (event, value) => {
+    trusted(event);
+    if (busy) throw new Error('Stop the response before switching modes.');
+    mode = value === 'chat' ? 'chat' : 'code';
+    saveState();
+    return mode;
+  });
+  ipcMain.handle('patric:initial', event => { trusted(event); return { workspace, mode }; });
 }
 function createWindow() {
   window = new BrowserWindow({ width: 1220, height: 840, minWidth: 800, minHeight: 600,
@@ -101,9 +124,11 @@ app.whenReady().then(() => {
     { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' }
   ]));
   try {
-    const saved = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'workspace.json'), 'utf8'));
-    if (typeof saved.workspace === 'string' && fs.statSync(saved.workspace).isDirectory()) workspace = saved.workspace;
-  } catch { /* First launch or a moved project: use the default workspace. */ }
+    const saved = JSON.parse(fs.readFileSync(statePath(), 'utf8'));
+    if (typeof saved.workspace === 'string' && isDirectory(saved.workspace)) workspace = saved.workspace;
+    if (saved.mode === 'chat' || saved.mode === 'code') mode = saved.mode;
+  } catch { /* First launch or a moved project: start in chat mode with no project. */ }
+  if (mode === 'code' && !workspace) mode = 'chat';
   startBackend();
   registerHandlers();
   createWindow();

@@ -152,3 +152,22 @@ test("Always allow denies the action if its preference cannot be saved", async (
     expect(fs.existsSync(path.join(directory, "approved.txt"))).toBe(false);
   });
 });
+
+test("chat mode answers without tools, a project, or project instructions", async () => {
+  await fixture(async (client, directory) => {
+    fs.writeFileSync(path.join(directory, "PATRIC.md"), "Shared project instruction: prefer small changes.");
+    client.send({ id: "unbound", method: "chat", data: { mode: "code", messages: [{ role: "user", content: "Write a file." }] } });
+    expect((await client.wait((m: any) => m.id === "unbound")).error).toContain("Open a project folder");
+    client.send({ id: "plain", method: "chat", data: { mode: "chat", cwd: directory, messages: [{ role: "user", content: "Write a file." }] } });
+    const reply = await client.wait((m: any) => m.id === "plain");
+    expect(reply.result.ok).toBe(true);
+    // The mock provider only offers a tool call, so a tool-free turn must not write the file.
+    expect(fs.existsSync(path.join(directory, "approved.txt"))).toBe(false);
+    const request = client.requests.at(-1);
+    expect(request.tools).toBeUndefined();
+    const system = request.messages.filter((m: any) => m.role === "system").map((m: any) => m.content).join("\n");
+    expect(system).not.toContain("Shared project instruction:");
+    expect(system).not.toContain("MEMORY SYSTEM");
+    expect(system).toContain("no tools");
+  });
+});
