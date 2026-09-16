@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PatricConfig } from "./config";
-import { normalizeModelForProvider } from "./config";
+import type { PatricConfig } from "../config/config.js";
+import { normalizeModelForProvider } from "../config/config.js";
 
 export type AgentScope = "project" | "user" | "builtin";
 export type AgentToolPolicy = "*" | string[];

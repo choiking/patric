@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { fetchModelCatalog, getModelOptions, getModelPickerWindow } from "./models.js";
-import type { PatricConfig } from "./config.js";
+import type { PatricConfig } from "../config/config.js";
 
 let fetchSpy: ReturnType<typeof spyOn> | undefined;
 afterEach(() => fetchSpy?.mockRestore());

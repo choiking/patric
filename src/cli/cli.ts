@@ -1,3 +1,4 @@
+import { print, printError } from "./output.js";
 import process from "node:process";
 import {
   buildAgentSystemPrompt,
@@ -6,24 +7,24 @@ import {
   getEffectiveAgentToolNames,
   loadAgentRegistry,
   resolveAgentModel
-} from "./agents";
-import type { PatricConfig } from "./config";
-import { loadChatConfig, streamChatTurn } from "./chat.js";
-import { clearStoredAuth, getAuthPath, getEffectiveAuthStatus, hasEffectiveAuth, listStoredAuth } from "./auth";
+} from "../core/agents.js";
+import type { PatricConfig } from "../config/config.js";
+import { loadChatConfig, streamChatTurn } from "../core/chat.js";
+import { clearStoredAuth, getAuthPath, getEffectiveAuthStatus, hasEffectiveAuth, listStoredAuth } from "../config/auth.js";
 import {
   configureProvider,
   formatConfigSummary,
   getConfigPath,
   setConfigValue,
   setModel
-} from "./config";
-import { loginWithAnthropicApiKey, loginWithGoogleOAuth, loginWithOpenAIOAuth } from "./oauth";
-import { applyPatch, generatePatch } from "./patch";
-import { startTui } from "./tui";
-import { collectContext, getRepoInfo, listRepoFiles } from "./repo";
-import { listAvailableModels, streamCompletion, type ToolEvent } from "./provider";
-import { AGENT_TOOL_NAMES, getAllToolNames } from "./tools";
-import { listDir, print, printError, readFileSafe, writeFileSafe, execCommand } from "./utils";
+} from "../config/config.js";
+import { loginWithAnthropicApiKey, loginWithGoogleOAuth, loginWithOpenAIOAuth } from "../config/oauth.js";
+import { applyPatch, generatePatch } from "../core/patch.js";
+import { startTui } from "./tui.js";
+import { collectContext, getRepoInfo, listRepoFiles } from "../core/repo.js";
+import { listAvailableModels, streamCompletion, type ToolEvent } from "../core/provider.js";
+import { AGENT_TOOL_NAMES, getAllToolNames } from "../core/tools.js";
+import { listDir, readFileSafe, writeFileSafe, execCommand } from "../core/utils.js";
 
 function usage(): string {
   return [

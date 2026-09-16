@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
-import { setStoredApiAuth, setStoredOAuthAuth, type OAuthAuth } from "./auth";
+import { setStoredApiAuth, setStoredOAuthAuth, type OAuthAuth } from "./auth.js";
 
 const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token";

@@ -1,4 +1,4 @@
-import type { PatricConfig } from "./config.js";
+import type { PatricConfig } from "../config/config.js";
 
 // Catalog protocol baseline, independent of the model IDs returned by the server.
 const CODEX_CATALOG_VERSION = "0.153.4";

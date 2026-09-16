@@ -2,7 +2,7 @@ import { chromium, type Browser, type BrowserContext, type Page, type Locator } 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import * as relay from "./relay-server";
+import * as relay from "./relay-server.js";
 
 // Relay server is started by the TUI on demand — not on import.
 // Starting on import keeps short-lived commands (--help, repo) alive forever.

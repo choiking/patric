@@ -2,7 +2,7 @@ import { packager } from "@electron/packager";
 import fs from "node:fs";
 import path from "node:path";
 
-const root = path.resolve(import.meta.dir, "..");
+const root = path.resolve(import.meta.dir, "../..");
 const runtimeDir = path.join(root, ".desktop-build");
 fs.mkdirSync(runtimeDir, { recursive: true });
 const runtime = path.join(runtimeDir, "patric-bun");

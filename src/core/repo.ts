@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execCommand, resolvePath, tryExecCommand } from "./utils";
+import { execCommand, resolvePath, tryExecCommand } from "./utils.js";
 
 export interface RepoInfo {
   root: string | null;

@@ -67,7 +67,7 @@ isolation following [Electron's security guidance](https://www.electronjs.org/do
 
 ### Shared engine
 
-CLI chat, terminal chat, and desktop chat all enter through `src/chat.ts`.
+CLI chat, terminal chat, and desktop chat all enter through `src/core/chat.ts`.
 `loadChatConfig` loads configuration and project instructions;
 `streamChatTurn` builds the system message and calls the existing provider/tool
 engine. The desktop backend only adapts window requests and events to that engine.
@@ -95,7 +95,7 @@ patric repo
 patric context package.json src
 patric agents list
 patric agents show reviewer
-patric agents run reviewer "review src/provider.ts for correctness issues"
+patric agents run reviewer "review src/core/provider.ts for correctness issues"
 patric patch "rename the config loader to settings loader"
 patric apply .patric/patches/20260310-123000.patch
 patric read src/index.js
@@ -231,14 +231,41 @@ Notes:
 
 ## Project Layout
 
-- `bin/patric`: shell launcher
-- `src/cli.ts`: command router
-- `src/repl.ts`: interactive shell
-- `src/provider.ts`: LLM provider client
-- `src/config.ts`: config loading and saving
-- `src/settings.ts`: full-screen settings UI
-- `src/repo.ts`: repository inspection and context building
-- `src/patch.ts`: patch generation and application helpers
+```text
+bin/patric                 Shell launcher → src/cli/cli.ts
+src/
+  core/                    Shared chat, providers, tools, agents, and permissions
+    chat.ts                Common CLI/desktop chat entrypoint
+    provider.ts            Provider requests and tool execution loop
+    stream.ts              SSE and NDJSON response parsing
+    context.ts             Token estimates and context-window tracking
+    models.ts              Model catalog discovery
+    repo.ts, patch.ts       Repository context and patch operations
+  cli/                     Command router, terminal UI, and prompt history
+    cli.ts                 Command-line entrypoint
+    tui.ts                 Interactive terminal state and interaction
+    render.ts              Terminal formatting and Markdown rendering
+    output.ts              Command-line output helpers
+  desktop/                 Electron UI and adapter to the shared engine
+    main.cjs               Native window, dialogs, and backend lifecycle
+    preload.cjs            Restricted renderer communication bridge
+    backend.ts             Bun adapter that calls core/chat.ts
+    index.html             Desktop layout
+    styles.css             Desktop styling
+    renderer.js            Desktop interaction and local conversation history
+    build.ts               Native app packaging with bundled Bun
+  browser/                 Browser automation and extension relay server
+  config/                  Settings, credentials, OAuth, and instructions
+extension/                 Browser extension source
+```
+
+CLI and desktop import the shared engine; core, browser, and config modules do
+not import UI modules. Tests live beside their modules. The architecture test
+checks this dependency boundary and resolves relative imports to catch stale
+paths after moves.
+
+`dist/` contains packaged apps and `.desktop-build/` contains packaging work
+files. Both are generated and excluded from Git, as is `node_modules/`.
 
 ## Sub-Agents
 

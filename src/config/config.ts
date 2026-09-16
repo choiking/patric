@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setStoredApiAuth, setStoredOAuthAuth } from "./auth";
+import { setStoredApiAuth, setStoredOAuthAuth } from "./auth.js";
 
 export interface PatricConfig {
   provider: string;

@@ -8,14 +8,6 @@ export interface ExecResult {
   stderr: string;
 }
 
-export function print(text = ""): void {
-  process.stdout.write(`${text}\n`);
-}
-
-export function printError(text: string): void {
-  process.stderr.write(`${text}\n`);
-}
-
 export function resolvePath(targetPath: string, cwd: string): string {
   return path.resolve(cwd, targetPath);
 }

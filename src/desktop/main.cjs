@@ -11,12 +11,12 @@ let sequence = 0;
 let workspace = app.isPackaged ? os.homedir() : process.cwd();
 let busy = false;
 const pending = new Map();
-const page = pathToFileURL(path.join(__dirname, 'desktop.html')).href;
+const page = pathToFileURL(path.join(__dirname, 'index.html')).href;
 
 function startBackend() {
   const bundled = path.join(process.resourcesPath, 'patric-bun');
   const bun = process.env.PATRIC_BUN || [path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun'].find(fs.existsSync) || 'bun';
-  backend = spawn(app.isPackaged ? bundled : bun, [path.join(__dirname, 'desktop-backend.ts')], {
+  backend = spawn(app.isPackaged ? bundled : bun, [path.join(__dirname, 'backend.ts')], {
     cwd: workspace, stdio: ['pipe', 'pipe', 'pipe'], env: process.env
   });
   createInterface({ input: backend.stdout }).on('line', line => {
@@ -84,7 +84,7 @@ function registerHandlers() {
 function createWindow() {
   window = new BrowserWindow({ width: 1220, height: 840, minWidth: 800, minHeight: 600,
     title: 'Patric', backgroundColor: '#f8f7f4', titleBarStyle: 'hiddenInset',
-    webPreferences: { preload: path.join(__dirname, 'desktop-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -92,7 +92,7 @@ function createWindow() {
     if (busy && dialog.showMessageBoxSync(window, { type: 'question', message: 'Quit while Patric is working?', detail: 'The current response will be interrupted. Commands already started may continue.', buttons: ['Keep working', 'Quit'], defaultId: 0, cancelId: 0 }) === 0) event.preventDefault();
   });
   window.on('closed', () => { window = null; });
-  window.loadFile(path.join(__dirname, 'desktop.html'));
+  window.loadFile(path.join(__dirname, 'index.html'));
 }
 app.whenReady().then(() => {
   app.setName('Patric');

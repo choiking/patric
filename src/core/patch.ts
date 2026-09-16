@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PatricConfig } from "./config";
-import { collectContext, findRepoRoot } from "./repo";
-import { requestCompletion, streamCompletion, type CompletionResult, type ChatMessage } from "./provider";
-import { execCommand, tryExecCommand } from "./utils";
+import type { PatricConfig } from "../config/config.js";
+import { collectContext, findRepoRoot } from "./repo.js";
+import { requestCompletion, streamCompletion, type CompletionResult, type ChatMessage } from "./provider.js";
+import { execCommand, tryExecCommand } from "./utils.js";
 
 export interface PatchResult extends CompletionResult {
   patchPath?: string;

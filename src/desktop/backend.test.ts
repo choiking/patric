@@ -19,7 +19,7 @@ async function fixture(run: (client: any, directory: string) => Promise<void>) {
     return new Response(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   const env = { ...process.env, HOME: directory, PATRIC_PROVIDER: "openai", PATRIC_MODEL: "test-model", PATRIC_API_KEY: "test-secret", PATRIC_OAUTH_TOKEN: "", PATRIC_BASE_URL: `http://127.0.0.1:${server.port}/v1` };
-  const child = spawn(process.execPath, [path.join(import.meta.dir, "desktop-backend.ts")], {
+  const child = spawn(process.execPath, [path.join(import.meta.dir, "backend.ts")], {
     env,
     stdio: ["pipe", "pipe", "pipe"]
   });
@@ -32,7 +32,7 @@ async function fixture(run: (client: any, directory: string) => Promise<void>) {
   const client = {
     requests,
     runCli: async (prompt: string) => {
-      const cli = Bun.spawn([process.execPath, path.join(import.meta.dir, "cli.ts"), "chat", prompt], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+      const cli = Bun.spawn([process.execPath, path.join(import.meta.dir, "../cli/cli.ts"), "chat", prompt], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
       const [code, stdout, stderr] = await Promise.all([cli.exited, new Response(cli.stdout).text(), new Response(cli.stderr).text()]);
       if (code !== 0) throw new Error(stderr || stdout);
       return stdout;

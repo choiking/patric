@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import type { AgentManager, AgentRunStatus } from "./agents";
-import { executeBrowserAction } from "./browser";
+import type { AgentManager, AgentRunStatus } from "./agents.js";
+import { executeBrowserAction } from "../browser/browser.js";
 
 // ---------------------------------------------------------------------------
 // Safety utilities

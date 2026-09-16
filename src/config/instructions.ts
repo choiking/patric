@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
-import { findRepoRoot } from "./repo.js";
+import { findRepoRoot } from "../core/repo.js";
 
 const MAX_BYTES = 10_000;
 

@@ -1,8 +1,8 @@
 import readline from "node:readline";
-import { loadConfig, configureProvider, setConfigValue } from "./config.js";
-import { listAvailableModels } from "./provider.js";
-import { PermissionState, type PermissionDecision } from "./permissions.js";
-import { loadChatConfig, streamChatTurn } from "./chat.js";
+import { loadConfig, configureProvider, setConfigValue } from "../config/config.js";
+import { listAvailableModels } from "../core/provider.js";
+import { PermissionState, type PermissionDecision } from "../core/permissions.js";
+import { loadChatConfig, streamChatTurn } from "../core/chat.js";
 
 const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 // Keep the stdout channel reserved for structured messages.

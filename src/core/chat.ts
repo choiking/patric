@@ -1,5 +1,5 @@
-import { loadConfig, type PatricConfig } from "./config.js";
-import { applyInstructions, loadInstructions } from "./instructions.js";
+import { loadConfig, type PatricConfig } from "../config/config.js";
+import { applyInstructions, loadInstructions } from "../config/instructions.js";
 import { streamCompletion, type ChatMessage, type RuntimeContext, type ToolEvent } from "./provider.js";
 
 /** Shared configuration and instruction loading for CLI and desktop entrypoints. */

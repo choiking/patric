@@ -8,9 +8,9 @@
   },
   "scripts": {
     "test": "bun test",
-    "check": "bun run src/cli.ts --help >/dev/null && bun run src/cli.ts repo >/dev/null && bun --smol -e \"await import('/Users/nanshengtu/Desktop/patric/src/tui.ts')\" >/dev/null",
+    "check": "bun run src/cli/cli.ts --help >/dev/null && bun run src/cli/cli.ts repo >/dev/null && bun --smol -e \"await import('./src/cli/tui.ts')\" >/dev/null",
     "desktop": "install-electron && electron .",
-    "desktop:build": "bun run src/desktop-build.ts"
+    "desktop:build": "bun run src/desktop/build.ts"
   },
   "dependencies": {
     "marked": "<16",
@@ -20,7 +20,7 @@
   "engines": {
     "node": ">=20"
   },
-  "main": "src/desktop-main.cjs",
+  "main": "src/desktop/main.cjs",
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "electron": "^44.4.1"
