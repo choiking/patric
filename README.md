@@ -23,8 +23,10 @@ connecting to direct OpenAI, ChatGPT Codex, OpenRouter, Anthropic, Ollama, and G
 
 Patric includes an Electron desktop app with streaming chat, project selection,
 per-project conversation history, provider/model settings, live model discovery,
-and tool activity. File changes and command execution require an **Allow once**
-decision in the desktop window. Existing CLI credentials are reused; API keys are
+and tool activity. File changes and command execution prompt for **Allow once** or **Always allow**
+unless the tool is already allowed. **Always allow** saves the tool name in the
+shared config’s `allowedTools` list and applies across projects, conversations,
+and restarts, including terminal chat. Remove the tool from that list to revoke it. Existing CLI credentials are reused; API keys are
 not sent back to the renderer.
 
 ```bash
@@ -55,8 +57,8 @@ settings, Enter sends, and Shift+Enter adds a newline.
 
 **Stop** cancels model output and prevents subsequent tools from starting. An
 already-running shell command or browser action may finish. Closing the app while
-working asks for confirmation. Desktop approvals are scoped to a single action;
-saved CLI tool allowances are not automatically applied in the desktop app.
+working asks for confirmation. Desktop and terminal chat share saved tool allowances. **Allow once** applies
+only to the pending action; **Always allow** applies to all actions of that tool.
 Browser tools retain the CLI's existing Playwright/browser setup requirements.
 
 Validation: `bun test` includes mock-provider desktop integration tests for
@@ -75,7 +77,7 @@ A mock-provider integration test compares the complete outgoing CLI and desktop
 requests for the same prompt, settings, and project instructions.
 
 Interface differences are explicit: terminal chat supports remembered approvals
-and slash commands, desktop chat currently prompts per action and stores its own
+and slash commands, desktop chat supports one-time and persistent approvals and stores its own
 conversations, and one-shot CLI chat retains its existing non-interactive tool
 policy. Authentication and settings screens differ, but provider discovery,
 credential resolution, model requests, and tool implementations are shared.

@@ -257,3 +257,11 @@ export function setConfigValue(key: keyof PatricConfig | string, value: string):
     saveConfig(config);
   }
 }
+
+/** Persist one tool allowance shared by the terminal and desktop interfaces. */
+export function rememberAllowedTool(toolName: string): void {
+  const config = loadConfig();
+  if (config.allowedTools.includes(toolName)) return;
+  config.allowedTools = [...config.allowedTools, toolName];
+  saveConfig(config);
+}

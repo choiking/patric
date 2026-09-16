@@ -123,7 +123,10 @@ async function send(event) {
 }
 function showPermission() {
   $('permission').hidden = permissionQueue.length === 0;
-  if (permissionQueue.length) $('permission-detail').textContent = permissionQueue[0].summary + '\n' + JSON.stringify(permissionQueue[0].arguments, null, 2);
+  if (permissionQueue.length) {
+    $('permission-detail').textContent = permissionQueue[0].summary + '\n' + JSON.stringify(permissionQueue[0].arguments, null, 2);
+    $('permission-scope').textContent = `Always allow remembers all ${permissionQueue[0].toolName} actions across projects in both desktop and CLI.`;
+  }
 }
 function decide(decision) {
   const request = permissionQueue.shift();
@@ -201,6 +204,7 @@ $('close-settings').onclick = () => $('settings-dialog').close();
 $('composer').onsubmit = send;
 $('stop').onclick = () => { api.stop(); $('stop').disabled = true; $('run-status').textContent = 'Stopping…'; permissionQueue = []; showPermission(); };
 $('allow').onclick = () => decide('allow-once');
+$('allow-always').onclick = () => decide('allow-always');
 $('deny').onclick = () => decide('deny');
 $('prompt').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } };
 document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); }; });

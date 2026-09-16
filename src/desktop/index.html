@@ -35,9 +35,9 @@
     </div>
     <div class="composer-area">
       <div id="notice" role="status" hidden></div>
-      <section id="permission" hidden><strong>Permission needed</strong><pre id="permission-detail"></pre><div><button id="deny">Deny</button><button id="allow" class="primary">Allow once</button></div></section>
+      <section id="permission" hidden><strong>Permission needed</strong><pre id="permission-detail"></pre><p id="permission-scope"></p><div><button id="deny">Deny</button><button id="allow">Allow once</button><button id="allow-always" class="primary">Always allow</button></div></section>
       <form id="composer"><textarea id="prompt" placeholder="What would you like to work on?" aria-label="Message Patric" rows="3"></textarea><div class="composer-footer"><button type="button" id="model-button"><span class="model-dot">✳</span><span id="model-label">Configure a model</span><span>⌄</span></button><div class="send-group"><small id="run-status">Enter to send</small><button id="send" type="submit" aria-label="Send message">↑</button><button id="stop" type="button" hidden>■ Stop</button></div></div></form>
-      <div class="composer-note"><span>Local tools. Your choice of model.</span><span>Patric asks before changing files or running commands.</span></div>
+      <div class="composer-note"><span>Local tools. Your choice of model.</span><span>Patric asks before using tools you haven’t allowed.</span></div>
     </div>
   </main>
   <dialog id="settings-dialog">

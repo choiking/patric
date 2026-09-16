@@ -1,5 +1,5 @@
 import readline from "node:readline";
-import { loadConfig, configureProvider, setConfigValue } from "../config/config.js";
+import { loadConfig, configureProvider, setConfigValue, rememberAllowedTool } from "../config/config.js";
 import { listAvailableModels } from "../core/provider.js";
 import { PermissionState, type PermissionDecision } from "../core/permissions.js";
 import { loadChatConfig, streamChatTurn } from "../core/chat.js";
@@ -18,9 +18,9 @@ async function handle(message: any) {
   const { id, method, data } = message;
   try {
     if (method === "permission") {
-      const decision = ["allow-once", "deny"].includes(data.decision) ? data.decision : "deny";
-      approvals.get(data.id)?.(decision);
-      approvals.delete(data.id);
+      const decision = ["allow-once", "allow-always", "deny"].includes(data?.decision) ? data.decision : "deny";
+      approvals.get(data?.id)?.(decision);
+      approvals.delete(data?.id);
       return;
     }
     if (method === "stop") {
@@ -60,10 +60,21 @@ async function chat(id: string, data: any) {
   try {
     const { config } = loadChatConfig();
     const permissions = new PermissionState({
+      configAllowed: config.allowedTools,
       promptFn: (request) => new Promise((resolve) => {
         if (controller.signal.aborted) return resolve("deny");
         const permissionId = crypto.randomUUID();
-        approvals.set(permissionId, resolve);
+        approvals.set(permissionId, (decision) => {
+          if (decision === "allow-always") {
+            try { rememberAllowedTool(request.toolName); }
+            catch {
+              emit({ event: "error", data: "Could not save this permission. The action was denied; try Allow once instead." });
+              resolve("deny");
+              return;
+            }
+          }
+          resolve(decision);
+        });
         emit({ event: "permission", data: { ...request, id: permissionId } });
       })
     });

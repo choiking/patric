@@ -48,6 +48,7 @@ import {
   normalizeModelForProvider,
   normalizeProviderName,
   rememberRecentModel,
+  rememberAllowedTool,
   saveConfig
 } from "../config/config.js";
 import { loginWithOpenAIOAuth, openBrowser } from "../config/oauth.js";
@@ -282,11 +283,7 @@ export async function startTui(
       // Persist "always allow" to config
       if (decision === "allow-always" && toolName) {
         try {
-          const cfg = loadConfig();
-          if (!cfg.allowedTools.includes(toolName)) {
-            cfg.allowedTools.push(toolName);
-            saveConfig(cfg);
-          }
+          rememberAllowedTool(toolName);
         } catch {}
       }
     }

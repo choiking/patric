@@ -19,18 +19,31 @@ async function fixture(run: (client: any, directory: string) => Promise<void>) {
     return new Response(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
   } });
   const env = { ...process.env, HOME: directory, PATRIC_PROVIDER: "openai", PATRIC_MODEL: "test-model", PATRIC_API_KEY: "test-secret", PATRIC_OAUTH_TOKEN: "", PATRIC_BASE_URL: `http://127.0.0.1:${server.port}/v1` };
-  const child = spawn(process.execPath, [path.join(import.meta.dir, "backend.ts")], {
-    env,
-    stdio: ["pipe", "pipe", "pipe"]
-  });
   const backlog: any[] = [];
   const listeners = new Set<() => void>();
-  createInterface({ input: child.stdout }).on("line", line => {
-    backlog.push(JSON.parse(line));
-    for (const listener of listeners) listener();
-  });
+  function startChild() {
+    const backend = spawn(process.execPath, [path.join(import.meta.dir, "backend.ts")], {
+      env, stdio: ["pipe", "pipe", "pipe"]
+    });
+    createInterface({ input: backend.stdout }).on("line", line => {
+      backlog.push(JSON.parse(line));
+      for (const listener of listeners) listener();
+    });
+    return backend;
+  }
+  let child = startChild();
+  async function stopChild() {
+    const exited = new Promise(resolve => child.once("exit", resolve));
+    child.kill();
+    await exited;
+  }
   const client = {
     requests,
+    restart: async () => {
+      await stopChild();
+      backlog.length = 0;
+      child = startChild();
+    },
     runCli: async (prompt: string) => {
       const cli = Bun.spawn([process.execPath, path.join(import.meta.dir, "../cli/cli.ts"), "chat", prompt], { cwd: directory, env, stdout: "pipe", stderr: "pipe" });
       const [code, stdout, stderr] = await Promise.all([cli.exited, new Response(cli.stdout).text(), new Response(cli.stderr).text()]);
@@ -52,7 +65,7 @@ async function fixture(run: (client: any, directory: string) => Promise<void>) {
     })
   };
   try { await run(client, directory); }
-  finally { child.kill(); server.stop(true); await new Promise(resolve => child.once("exit", resolve)); fs.rmSync(directory, { recursive: true, force: true }); }
+  finally { await stopChild(); server.stop(true); fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
 test("desktop settings exclude credentials and malformed conversations are rejected", async () => {
@@ -80,6 +93,7 @@ for (const decision of ["deny", "allow-once", "stop"]) {
       expect(result.result.stopped).toBe(decision === "stop");
       expect(fs.existsSync(path.join(directory, "approved.txt"))).toBe(decision === "allow-once");
       if (decision !== "stop") expect(result.result.content).toContain("Finished safely.");
+      expect(fs.existsSync(path.join(directory, ".config", "patric", "config.json"))).toBe(false);
     });
   });
 }
@@ -97,5 +111,44 @@ test("CLI and desktop send identical model requests with project instructions", 
     expect(client.requests[0]).toEqual(client.requests[1]);
     const system = client.requests[0].messages.filter((m: any) => m.role === "system");
     expect(system.map((m: any) => m.content).join("\n").split("Shared project instruction:")).toHaveLength(2);
+  });
+});
+
+
+test("Always allow persists only the approved tool and works after backend restart", async () => {
+  await fixture(async (client, directory) => {
+    const configDir = path.join(directory, ".config", "patric");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = path.join(configDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ allowedTools: ["edit_file"], systemPrompt: "Keep this setting." }));
+    const data = { cwd: directory, messages: [{ role: "user", content: "Write a file." }] };
+    client.send({ id: "first", method: "chat", data });
+    const permission = await client.wait((m: any) => m.event === "permission");
+    client.send({ method: "permission", data: { id: "not-a-pending-request", decision: "allow-always", toolName: "bash" } });
+    client.send({ method: "permission", data: { id: permission.data.id, decision: "allow-always", toolName: "bash" } });
+    expect((await client.wait((m: any) => m.id === "first")).result.ok).toBe(true);
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(config.allowedTools).toEqual(["edit_file", "write_file"]);
+    expect(config.systemPrompt).toBe("Keep this setting.");
+    expect(fs.readFileSync(path.join(directory, "approved.txt"), "utf8")).toBe("approved");
+    fs.unlinkSync(path.join(directory, "approved.txt"));
+    await client.restart();
+    client.send({ id: "second", method: "chat", data });
+    const next = await client.wait((m: any) => m.id === "second" || m.event === "permission");
+    expect(next.id).toBe("second");
+    expect(next.result.ok).toBe(true);
+    expect(fs.existsSync(path.join(directory, "approved.txt"))).toBe(true);
+  });
+});
+
+test("Always allow denies the action if its preference cannot be saved", async () => {
+  await fixture(async (client, directory) => {
+    client.send({ id: "chat", method: "chat", data: { cwd: directory, messages: [{ role: "user", content: "Write a file." }] } });
+    const permission = await client.wait((m: any) => m.event === "permission");
+    fs.writeFileSync(path.join(directory, ".config"), "Block creating the config directory");
+    client.send({ method: "permission", data: { id: permission.data.id, decision: "allow-always" } });
+    expect((await client.wait((m: any) => m.event === "error")).data).toContain("Could not save");
+    await client.wait((m: any) => m.id === "chat");
+    expect(fs.existsSync(path.join(directory, "approved.txt"))).toBe(false);
   });
 });
