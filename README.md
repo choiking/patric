@@ -30,12 +30,19 @@ read or change files, run commands, browse the web, or read and save memory, and
 it needs no project. Project `PATRIC.md` instructions are not loaded; your
 user-level `USER.md`, `SOUL.md`, and `PATRIC.md` still apply.
 
-**Code** is the coding agent and must be bound to a local folder. Until you open
-one, the composer is replaced by a prompt to choose a project; every turn then
-runs with that folder as the working directory and the full tool set. Switch
-modes with the sidebar toggle, `Cmd/Ctrl+1` (Chat), or `Cmd/Ctrl+2` (Code).
-Conversations are listed per mode, and Code conversations per project. The
-current mode and project are remembered across restarts.
+**Code** is the coding agent, and each project is a folder. Open a folder and it
+joins the sidebar project list (up to 12, most recent first); click any project
+to switch to it, and `×` removes it from the list without touching the folder or
+its saved conversations. Until a project is open the composer is replaced by a
+prompt to choose one; every turn then runs with that folder as the working
+directory and the full tool set. Removing the open project unbinds Code mode.
+Switch modes with the sidebar toggle, `Cmd/Ctrl+1` (Chat), or `Cmd/Ctrl+2`
+(Code). Code conversations belong to a folder and are listed under it in the
+project list — the open project shows its conversations, the others show how
+many they hold — so Code mode has no conversation list detached from a project.
+Chat, having no folders, keeps a flat list of its own. The project list, current
+project, and mode are remembered across restarts; folders that have moved or
+been deleted drop off the list at launch.
 
 In Code mode, file changes and command execution prompt for **Allow once** or **Always allow**
 unless the tool is already allowed. **Always allow** saves the tool name in the
@@ -61,7 +68,7 @@ Bun, so the packaged app does not require a separate Bun installation. Builds ar
 unsigned local builds; signing, notarization, installers, and automatic updates
 are not configured. Other platforms have not been tested.
 
-Choose a project using the workspace button in Code mode. Settings share the CLI config at
+Open projects with the sidebar project list in Code mode. Settings share the CLI config at
 `~/.config/patric/config.json`; environment overrides apply to both interfaces.
 OAuth login still runs through the CLI (`patric auth login openai-codex` or the
 existing Gemini login flow). Conversation text is stored locally in Electron's
