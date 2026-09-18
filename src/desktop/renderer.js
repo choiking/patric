@@ -5,11 +5,8 @@ let workspace = null;
 let projects = [];
 let mode = 'chat';
 let config;
-let busy = false;
+const runs = new Map();
 let current;
-let responseNode;
-let responseText = '';
-let permissionQueue = [];
 let conversations = [];
 try {
   const saved = JSON.parse(localStorage.getItem('patric.conversations') || '[]');
@@ -37,7 +34,6 @@ function conversationButton(conversation) {
   button.className = `conversation${current?.id === conversation.id ? ' active' : ''}`;
   button.textContent = conversation.title;
   button.title = conversation.title;
-  button.disabled = busy;
   button.onclick = () => { current = conversation; renderMessages(); renderMode(); notice(); };
   return button;
 }
@@ -57,10 +53,22 @@ function renderProjects() {
     group.className = `project-group${active ? ' active' : ''}`;
     const row = document.createElement('div');
     row.className = 'project';
+    const showProjectMenu = async event => {
+      event.preventDefault();
+      try {
+        const action = await api.projectMenu(project);
+        if (action === 'remove') { await forgetProject(project); return; }
+        if (action !== 'new-chat') return;
+        // Bind the chosen folder before clearing the conversation. A failed
+        // switch must leave the current chat intact.
+        if (project !== workspace) setProjects(await api.selectProject(project));
+        fresh();
+      } catch (error) { notice(error.message); }
+    };
+    row.oncontextmenu = showProjectMenu;
     const open = document.createElement('button');
     open.className = 'project-open';
     open.title = project;
-    open.disabled = busy;
     const name = document.createElement('strong');
     name.textContent = projectName(project);
     const parent = document.createElement('small');
@@ -75,14 +83,14 @@ function renderProjects() {
       count.title = `${items.length} conversation${items.length === 1 ? '' : 's'}`;
       open.append(count);
     }
-    const forget = document.createElement('button');
-    forget.className = 'project-forget';
-    forget.textContent = '×';
-    forget.disabled = busy;
-    forget.title = `Remove ${projectName(project)} from this list`;
-    forget.setAttribute('aria-label', `Remove ${projectName(project)} from this list`);
-    forget.onclick = () => forgetProject(project);
-    row.append(open, forget);
+    const more = document.createElement('button');
+    more.className = 'project-more';
+    more.textContent = '⋯';
+    more.title = `Options for ${projectName(project)}`;
+    more.setAttribute('aria-label', more.title);
+    more.setAttribute('aria-haspopup', 'menu');
+    more.onclick = showProjectMenu;
+    row.append(open, more);
     group.append(row);
     // Only the open project expands: its conversations are the ones you can resume.
     if (active) {
@@ -136,6 +144,7 @@ function renderMode() {
   $('workspace-section').hidden = mode !== 'code';
   renderProjects();
   $('welcome-eyebrow').textContent = copy.eyebrow;
+  $('welcome-title').textContent = mode === 'chat' ? 'What can I help with?' : 'What should we build?';
   $('welcome-subtitle').replaceChildren(copy.subtitle[0], document.createElement('br'), copy.subtitle[1]);
   $('chat-suggestions').hidden = mode !== 'chat';
   $('code-suggestions').hidden = mode !== 'code';
@@ -148,9 +157,10 @@ function renderMode() {
   $('workspace-gate').hidden = bound;
   $('composer').hidden = !bound;
   renderHistory();
+  renderBusy();
 }
 async function switchMode(next) {
-  if (busy || mode === next) return;
+  if (mode === next) return;
   try { mode = await api.setMode(next); }
   catch (error) { notice(error.message); return; }
   current = undefined;
@@ -172,13 +182,17 @@ function renderHistory() {
 function addMessage(role, content) {
   const article = document.createElement('article');
   article.className = `message ${role}`;
-  const label = document.createElement('div');
-  label.className = 'message-label';
-  label.textContent = role === 'user' ? 'YOU' : 'PATRIC';
+  if (role === 'user') {
+    const label = document.createElement('div');
+    label.className = 'message-label';
+    label.textContent = 'YOU';
+    article.append(label);
+  }
   const body = document.createElement('div');
   body.className = 'message-content';
-  body.textContent = content;
-  article.append(label, body);
+  if (role === 'assistant') renderMarkdown(body, content);
+  else body.textContent = content;
+  article.append(body);
   $('messages').append(article);
   return body;
 }
@@ -186,11 +200,13 @@ function renderMessages() {
   $('messages').replaceChildren();
   $('welcome').hidden = Boolean(current?.messages.length);
   for (const message of current?.messages || []) addMessage(message.role, message.content);
+  const run = runs.get(current?.id);
+  if (run) $('messages').append(...run.nodes);
+  renderBusy();
   scrollBottom();
 }
 function scrollBottom() { $('scroll-area').scrollTop = $('scroll-area').scrollHeight; }
 function fresh() {
-  if (busy) return;
   current = undefined;
   renderMessages();
   // renderMode redraws the project groups too, clearing the active conversation.
@@ -198,21 +214,19 @@ function fresh() {
   notice();
   $('prompt').focus();
 }
-function setBusy(value) {
-  busy = value;
-  for (const id of ['new-chat', 'workspace', 'settings-button', 'model-button', 'mode-chat', 'mode-code']) $(id).disabled = value;
-  $('send').hidden = value;
-  $('stop').hidden = !value;
-  $('stop').disabled = false;
-  $('prompt').disabled = value;
-  $('run-status').textContent = value ? 'Working…' : 'Enter to send';
-  // renderMode covers the project list too, which also locks while a turn runs.
-  renderMode();
+function renderBusy() {
+  const run = runs.get(current?.id);
+  $('send').hidden = Boolean(run);
+  $('stop').hidden = !run;
+  $('stop').disabled = Boolean(run?.stopping);
+  $('prompt').disabled = Boolean(run);
+  $('run-status').textContent = run ? (run.stopping ? 'Stopping…' : 'Working…') : 'Enter to send';
+  showPermission();
 }
 async function send(event) {
   event.preventDefault();
   const prompt = $('prompt').value.trim();
-  if (!prompt || busy) return;
+  if (!prompt || runs.has(current?.id)) return;
   if (mode === 'code' && !workspace) { notice('Open a project folder to use Code mode.'); return; }
   if (!config?.model) { await openSettings(); return; }
   notice();
@@ -223,52 +237,57 @@ async function send(event) {
   current.messages.push({ role: 'user', content: prompt });
   $('prompt').value = '';
   renderMessages();
-  responseNode = addMessage('assistant', 'Thinking…');
-  responseText = '';
-  setBusy(true);
+  const conversation = current;
+  const responseNode = addMessage('assistant', 'Thinking…');
+  const run = { responseNode, text: '', nodes: [responseNode.parentElement], permissions: [], stopping: false };
+  runs.set(conversation.id, run);
+  renderMode();
   persist();
   try {
-    const result = await api.chat(current.messages, mode);
+    const result = await api.chat(conversation.messages, conversation.mode, conversation.id);
     if (!result.ok) {
-      notice(result.content);
-      responseNode.textContent = responseText || 'The response could not be completed.';
+      if (current === conversation) notice(result.content);
+      renderMarkdown(responseNode, run.text || 'The response could not be completed.');
     } else {
-      if (!responseText) responseText = result.content;
-      responseNode.textContent = responseText || (result.stopped ? 'Response stopped.' : 'Done.');
-      if (result.stopped) notice('Response stopped. Commands already started may still be running.');
+      if (!run.text) run.text = result.content;
+      renderMarkdown(responseNode, run.text || (result.stopped ? 'Response stopped.' : 'Done.'));
+      if (result.stopped && current === conversation) notice('Response stopped. Commands already started may still be running.');
     }
-    if (result.ok && responseText) current.messages.push({ role: 'assistant', content: responseText });
-  } catch (error) { responseNode.textContent = 'Unable to complete this response.'; notice(error.message); }
-  finally {
-    responseNode = undefined;
-    permissionQueue = [];
-    showPermission();
-    setBusy(false);
+    if (result.ok && run.text) conversation.messages.push({ role: 'assistant', content: run.text });
+  } catch (error) {
+    responseNode.textContent = 'Unable to complete this response.';
+    if (current === conversation) notice(error.message);
+  } finally {
+    runs.delete(conversation.id);
+    renderBusy();
     persist();
-    $('prompt').focus();
-    scrollBottom();
+    if (current === conversation) scrollBottom();
   }
 }
 function showPermission() {
-  $('permission').hidden = permissionQueue.length === 0;
-  if (permissionQueue.length) {
-    $('permission-detail').textContent = permissionQueue[0].summary + '\n' + JSON.stringify(permissionQueue[0].arguments, null, 2);
-    $('permission-scope').textContent = `Always allow remembers all ${permissionQueue[0].toolName} actions across projects in both desktop and CLI.`;
+  const queue = runs.get(current?.id)?.permissions || [];
+  $('permission').hidden = queue.length === 0;
+  if (queue.length) {
+    $('permission-detail').textContent = queue[0].summary + '\n' + JSON.stringify(queue[0].arguments, null, 2);
+    $('permission-scope').textContent = `Always allow remembers all ${queue[0].toolName} actions across projects in both desktop and CLI.`;
   }
 }
 function decide(decision) {
-  const request = permissionQueue.shift();
-  if (request) api.permission(request.id, decision);
+  const request = runs.get(current?.id)?.permissions.shift();
+  if (request) api.permission(request.id, decision, current.id);
   showPermission();
 }
-api.onEvent(({ event, data }) => {
-  if (event === 'chunk' && responseNode) {
+api.onEvent(({ event, data, conversationId }) => {
+  const run = runs.get(conversationId);
+  const visible = current?.id === conversationId;
+  if (!run) return;
+  if (event === 'chunk') {
     const nearBottom = $('scroll-area').scrollHeight - $('scroll-area').scrollTop - $('scroll-area').clientHeight < 120;
-    responseText += data;
-    responseNode.textContent = responseText;
-    if (nearBottom) scrollBottom();
-  } else if (event === 'permission') { permissionQueue.push(data); showPermission(); }
-  else if (event === 'tool' && busy && ['tool_start', 'tool_end', 'agent_status'].includes(data.type)) {
+    run.text += data;
+    renderMarkdown(run.responseNode, run.text);
+    if (visible && nearBottom) scrollBottom();
+  } else if (event === 'permission') { run.permissions.push(data); showPermission(); }
+  else if (event === 'tool' && ['tool_start', 'tool_end', 'agent_status'].includes(data.type)) {
     const detail = document.createElement('details');
     detail.className = 'tool';
     const summary = document.createElement('summary');
@@ -276,12 +295,11 @@ api.onEvent(({ event, data }) => {
     const body = document.createElement('pre');
     body.textContent = data.result || data.detail || JSON.stringify(data.arguments, null, 2);
     detail.append(summary, body);
-    $('messages').append(detail);
-    scrollBottom();
-  } else if (event === 'error') notice(data);
+    run.nodes.push(detail);
+    if (visible) { $('messages').append(detail); scrollBottom(); }
+  } else if (event === 'error' && visible) notice(data);
 });
 async function openSettings() {
-  if (busy) return;
   try {
     config = await api.settings();
     $('provider').value = config.provider;
@@ -326,12 +344,11 @@ async function chooseWorkspace() {
   catch (error) { notice(error.message); }
 }
 async function selectProject(project) {
-  if (busy || project === workspace) return;
+  if (project === workspace) return;
   try { setProjects(await api.selectProject(project)); }
   catch (error) { notice(error.message); }
 }
 async function forgetProject(project) {
-  if (busy) return;
   try { setProjects(await api.forgetProject(project)); }
   catch (error) { notice(error.message); }
 }
@@ -344,14 +361,21 @@ $('settings-button').onclick = openSettings;
 $('model-button').onclick = openSettings;
 $('close-settings').onclick = () => $('settings-dialog').close();
 $('composer').onsubmit = send;
-$('stop').onclick = () => { api.stop(); $('stop').disabled = true; $('run-status').textContent = 'Stopping…'; permissionQueue = []; showPermission(); };
+$('stop').onclick = () => {
+  const run = runs.get(current?.id);
+  if (!run) return;
+  api.stop(current.id);
+  run.stopping = true;
+  run.permissions = [];
+  renderBusy();
+};
 $('allow').onclick = () => decide('allow-once');
 $('allow-always').onclick = () => decide('allow-always');
 $('deny').onclick = () => decide('deny');
 $('prompt').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } };
 document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = () => { $('prompt').value = button.dataset.prompt; $('prompt').focus(); }; });
 document.addEventListener('keydown', event => {
-  if ((event.metaKey || event.ctrlKey) && !busy && !$('settings-dialog').open) {
+  if ((event.metaKey || event.ctrlKey) && !$('settings-dialog').open) {
     if (event.key === 'n') { event.preventDefault(); fresh(); }
     if (event.key === ',') { event.preventDefault(); openSettings(); }
     if (event.key === '1') { event.preventDefault(); void switchMode('chat'); }

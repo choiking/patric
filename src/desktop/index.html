@@ -6,11 +6,13 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Patric</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="../../node_modules/marked/lib/marked.umd.js" defer></script>
+  <script src="markdown.js" defer></script>
   <script src="renderer.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">p<span>·</span></span><strong>patric</strong><span class="desktop-label">DESKTOP</span></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">&gt;_</span><strong>Patric</strong><span class="desktop-label">Desktop</span></div>
     <div class="mode-switch" role="tablist" aria-label="Mode">
       <button id="mode-chat" role="tab" aria-selected="true"><span>✳</span>Chat<kbd>⌘ 1</kbd></button>
       <button id="mode-code" role="tab" aria-selected="false"><span>⌘</span>Code<kbd>⌘ 2</kbd></button>
@@ -18,11 +20,11 @@
     <p id="mode-hint" class="mode-hint">Talk things through. No tools, no project.</p>
     <button id="new-chat" class="new-chat"><span>＋</span> New conversation <kbd>⌘ N</kbd></button>
     <div id="workspace-section">
-      <div class="section-label">PROJECTS</div>
+      <div class="section-label">Projects</div>
       <nav id="projects" aria-label="Projects"></nav>
       <button id="workspace" class="open-project"><span>＋</span> Open a folder…</button>
     </div>
-    <div class="section-label recent-label" id="history-label">RECENT CONVERSATIONS</div>
+    <div class="section-label recent-label" id="history-label">Conversations</div>
     <nav id="conversations" aria-label="Conversations"></nav>
     <div class="sidebar-bottom"><div class="local-status"><span class="status-dot"></span> <span id="local-status-text">Conversation only</span></div><button id="settings-button">⚙ <span>Settings</span><span class="shortcut">⌘ ,</span></button></div>
   </aside>
@@ -31,7 +33,7 @@
     <div id="scroll-area">
       <section id="welcome">
         <div class="eyebrow"><span class="spark">✳</span> <span id="welcome-eyebrow">A PLACE TO THINK OUT LOUD</span></div>
-        <h1 id="welcome-title">A little curiosity.<br>A lot of possibility.</h1>
+        <h1 id="welcome-title">What can I help with?</h1>
         <p id="welcome-subtitle">Ask a question, sketch an idea, or talk a problem through.<br>Nothing on your machine is touched.</p>
         <div class="suggestions" id="chat-suggestions">
           <button data-prompt="Explain how OAuth 2.0 authorization code flow with PKCE works, and when to use it."><span>✳</span><strong>Explain something</strong><small>A clear answer, no setup needed</small><b>↗</b></button>
@@ -59,7 +61,7 @@
     </div>
   </main>
   <dialog id="settings-dialog">
-    <form id="settings-form"><div class="dialog-heading"><div class="eyebrow">MAKE YOURSELF AT HOME</div><h2>Model settings</h2><p>Uses the same configuration and credentials as the CLI.</p></div>
+    <form id="settings-form"><div class="dialog-heading"><h2>Model settings</h2><p>Uses the same configuration and credentials as the CLI.</p></div>
       <label>Provider<select id="provider"><option value="openai">OpenAI</option><option value="openai-codex">ChatGPT Codex</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="ollama">Ollama</option><option value="gemini">Gemini</option></select></label>
       <label>Model<div class="model-field"><input id="model" list="model-options" required placeholder="Enter a model ID"><button type="button" id="refresh-models">Refresh models</button></div><datalist id="model-options"></datalist></label>
       <label>Base URL<input id="base-url" type="url" required></label>
